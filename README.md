@@ -1,16 +1,46 @@
-# BatMon
+<p align="center">
+  <img src="assets/logo.png" width="128" height="128" alt="BatMon Logo" />
+</p>
 
-BatMon is a lightweight Android battery monitor for phones and tablets, with Home Assistant integration through MQTT and configurable HTTP webhooks.
+<h1 align="center">BatMon</h1>
+
+<p align="center">
+  <strong>Smart battery monitor for Android devices with Home Assistant, MQTT, and Webhook automation.</strong>
+</p>
+
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-blue.svg" alt="License"></a>
+  <a href="https://github.com/sunilsankar/BatMon/releases"><img src="https://img.shields.io/badge/release-0.1.0--beta-green.svg" alt="Release"></a>
+  <img src="https://img.shields.io/badge/Android-9.0%2B%20(API%2028)-brightgreen.svg" alt="Android Version">
+</p>
+
+---
+
+## Purpose
+
+Many Android devices—such as wall-mounted dashboard tablets, dedicated smart home controllers, security cameras, or repurposed phones—remain permanently connected to a charger. Continuous charging at 100% capacity accelerates battery degradation, creates chemical wear, and risks battery swelling (bloating).
+
+**BatMon** prevents battery degradation by keeping your device charged within a healthy battery cycle (typically 45% to 80%):
+
+1. **Automate Smart-Plug Charging:** Integrates with Home Assistant through MQTT 5.0 or HTTP webhooks to automatically turn a smart plug on when the battery drops below your low threshold, and turn it off when the high threshold is reached.
+2. **Local-First & Private:** Communicates directly with your local Home Assistant instance or MQTT broker. No external cloud services, third-party servers, or proprietary accounts required.
+3. **Hardware Health Protection:** Protects retired and dedicated Android hardware from thermal stress and battery damage, safely extending their operational lifespan.
+4. **Standalone & Connected Flexibility:** Works as an autonomous local battery monitor with threshold notifications, or as a connected sensor node in your home automation setup.
 
 ## Features
 
-- **Minimum Android version:** Android 9 (API 28). Target: Android 15 (API 35).
-- **Modern UI:** Jetpack Compose, Material 3, light/dark themes, phone & tablet responsive layouts.
-- **Battery Gauge:** Visual circular percentage gauge, charging status, and threshold markers.
-- **Alert Thresholds:** Configurable low/high thresholds (defaults: 45% and 80%).
-- **MQTT & Home Assistant Integration:** Broker connectivity (TCP/TLS), authentication, LWT availability (`online`/`offline`), state publishing, and Home Assistant MQTT auto-discovery for battery, charging binary sensor, diagnostics, and last-update timestamp.
-- **HTTP Webhooks:** Event-triggered HTTP/HTTPS webhooks with durable queue, exponential backoff retries, delivery history, custom headers, payload templates, and HTTPS enforcement.
-- **Smart-Plug Charging Automation:** Example Home Assistant automations for MQTT and Webhooks with stale-data protection, duplicate command suppression, manual override, and restart recovery.
+- **Modern Jetpack Compose UI:** Material 3 design with light/dark theme support, smooth typography, and responsive layouts tailored for phones and tablets in both portrait and landscape orientations.
+- **Visual Battery Gauge:** Circular battery percentage dial displaying live charging state and configurable threshold markers.
+- **Configurable Battery Thresholds:** Custom low (default 45%) and high (default 80%) threshold boundaries with validation rules.
+- **MQTT 5.0 & Home Assistant Discovery:** Native MQTT 5.0 client support, automatic Home Assistant MQTT sensor discovery (`sensor.batmon_<device_id>_battery`, `binary_sensor.batmon_<device_id>_charging`, health, diagnostics), Last Will and Testament (LWT) availability tracking, and TLS broker support.
+- **HTTP Webhooks:** Event-driven webhooks for battery thresholds and charging states with a durable offline queue, exponential backoff retries, delivery history logs, and configurable JSON payloads.
+- **Flexible Background Monitoring:**
+  - **Low-Power Mode (Default):** Battery broadcast listener and WorkManager periodic background sync designed for minimal battery consumption.
+  - **Real-Time Mode (Optional):** Foreground service with ongoing notification for near-instantaneous threshold alerts.
+- **Stale Data Safety Protection:** Flags battery readings older than 30 minutes (3 minutes in real-time mode) as stale, preventing smart-plug automations from switching based on obsolete telemetry.
+- **In-App Auto-Updates:** Built-in update checker and APK downloader powered by GitHub releases, allowing updates without Google Play Services.
+- **Reboot Resilience:** Restores background monitoring and workers on device boot (`BOOT_COMPLETED`).
+- **Security & Privacy First:** Zero personal data collection, credentials stored strictly in private app storage, HTTPS enforced by default, and sensitive tokens redacted from all logs.
 
 ## Build Requirements
 
