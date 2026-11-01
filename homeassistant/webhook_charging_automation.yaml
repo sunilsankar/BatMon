@@ -1,0 +1,87 @@
+# ==============================================================================
+# BatMon — Home Assistant Smart Plug Charging Automation (HTTP Webhooks)
+# ==============================================================================
+# Specification Reference: Section 6 & Section 7
+#
+# HOW IT WORKS:
+# 1. BatMon dispatches HTTP POST webhooks for battery_low, battery_high,
+#    charging_started, and charging_stopped events directly to Home Assistant.
+# 2. Configure BatMon Webhook URL:
+#    https://<YOUR_HOME_ASSISTANT_URL>/api/webhook/batmon_charge_webhook
+# 3. This automation handles incoming webhooks and controls the smart plug.
+# 4. Safety Guards:
+#    - Validates event type and device_id from payload
+#    - Rejects stale event timestamps (> 30 minutes)
+#    - Avoids duplicate switching commands
+#    - Respects manual override helper
+#
+# ENTITY ID PLACEHOLDERS TO REPLACE:
+#   switch.smart_plug_charger_placeholder -> Your smart plug switch entity
+#   android-tablet-office                 -> Your configured BatMon device ID
+# ==============================================================================
+
+- id: "batmon_webhook_charging_control"
+  alias: "BatMon - Webhook Smart Plug Charging Control"
+  description: "Switches smart plug charger based on BatMon HTTP webhook events (battery_low ON / battery_high OFF)."
+  mode: queued
+  max: 10
+
+  trigger:
+    - platform: webhook
+      webhook_id: "batmon_charge_webhook"
+      allowed_methods:
+        - POST
+      local_only: false
+
+  condition:
+    # 1. Verify device ID matches expected target
+    - condition: template
+      value_template: >-
+        {{ trigger.json.device_id is defined and trigger.json.device_id == 'android-tablet-office' }}
+
+    # 2. Verify smart plug is available
+    - condition: template
+      value_template: >-
+        {{ states('switch.smart_plug_charger_placeholder') not in ['unavailable', 'unknown'] }}
+
+    # 3. Verify manual override is not active (if helper is used)
+    - condition: template
+      value_template: >-
+        {{ is_state('input_boolean.batmon_manual_override', 'off')
+           or states('input_boolean.batmon_manual_override') == 'unknown' }}
+
+    # 4. STALE DATA CHECK: Reject event timestamps older than 30 minutes (1800s)
+    - condition: template
+      value_template: >-
+        {% if trigger.json.timestamp is defined %}
+          {% set event_time = as_timestamp(trigger.json.timestamp, default=0) %}
+          {{ (as_timestamp(now()) - event_time) < 1800 }}
+        {% else %}
+          true
+        {% endif %}
+
+  action:
+    - choose:
+        # LOW BATTERY EVENT -> Turn ON charger (if not already ON)
+        - conditions:
+            - condition: template
+              value_template: "{{ trigger.json.event == 'battery_low' }}"
+            - condition: state
+              entity_id: switch.smart_plug_charger_placeholder
+              state: "off"
+          sequence:
+            - service: switch.turn_on
+              target:
+                entity_id: switch.smart_plug_charger_placeholder
+
+        # HIGH BATTERY EVENT -> Turn OFF charger (if not already OFF)
+        - conditions:
+            - condition: template
+              value_template: "{{ trigger.json.event == 'battery_high' }}"
+            - condition: state
+              entity_id: switch.smart_plug_charger_placeholder
+              state: "on"
+          sequence:
+            - service: switch.turn_off
+              target:
+                entity_id: switch.smart_plug_charger_placeholder

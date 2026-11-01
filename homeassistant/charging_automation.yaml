@@ -1,0 +1,166 @@
+# ==============================================================================
+# BatMon — Home Assistant Smart Plug Charging Automation (MQTT & Discovery)
+# ==============================================================================
+# Specification Reference: Section 7 & Section 14 (Criterion 13)
+#
+# HOW IT WORKS:
+# 1. BatMon publishes battery state & Home Assistant discovery entities via MQTT.
+# 2. Home Assistant is the authority that decides when to turn the smart plug ON/OFF.
+# 3. Default Policy:
+#    - Turn Charger ON at or below 45% (when switch is OFF)
+#    - Turn Charger OFF at or above 80% (when switch is ON)
+# 4. Safety Guards:
+#    - Stale Data Protection: Rejects battery readings older than 30 minutes (1800s)
+#    - Duplicate Suppression: Never issues redundant ON commands if already ON, or OFF if already OFF
+#    - Switch Availability: Ensures the smart plug is not 'unavailable' or 'unknown'
+#    - Manual Override Support: Pauses automation when manual override boolean is ON
+#    - Restart Recovery: Safely re-evaluates battery state when Home Assistant reboots
+#    - Verification: Checks resulting switch state after switching
+#
+# ENTITY ID PLACEHOLDERS TO REPLACE:
+#   switch.smart_plug_charger_placeholder        -> Your smart plug switch entity
+#   sensor.batmon_my_device_battery              -> BatMon battery sensor (from MQTT discovery)
+#   binary_sensor.batmon_my_device_availability  -> BatMon availability sensor
+#   input_boolean.batmon_charging_automation     -> Automation master toggle (optional helper)
+#   input_boolean.batmon_manual_override         -> Manual override toggle (optional helper)
+# ==============================================================================
+
+# Helper Input Booleans (Add to your configuration.yaml or UI Helpers):
+# input_boolean:
+#   batmon_charging_automation:
+#     name: "BatMon Charging Automation"
+#     icon: mdi:battery-charging-auto
+#     initial: on
+#   batmon_manual_override:
+#     name: "BatMon Manual Override"
+#     icon: mdi:hand-back-right
+#     initial: off
+
+- id: "batmon_smart_plug_charging_control"
+  alias: "BatMon - Smart Plug Charging Control"
+  description: "Controls smart-plug charger based on fresh BatMon battery levels (45% ON / 80% OFF) with duplicate prevention and stale-data safety."
+  mode: single
+  max_exceeded: silent
+
+  trigger:
+    # Trigger 1: Battery level changes
+    - platform: state
+      entity_id: sensor.batmon_my_device_battery
+      id: "battery_change"
+
+    # Trigger 2: Home Assistant starts up (recovery after reboot)
+    - platform: homeassistant
+      event: start
+      id: "ha_restart"
+
+    # Trigger 3: Device comes back online
+    - platform: state
+      entity_id: binary_sensor.batmon_my_device_availability
+      to: "on"
+      id: "device_online"
+
+    # Trigger 4: Manual override turned off (resume automation)
+    - platform: state
+      entity_id: input_boolean.batmon_manual_override
+      to: "off"
+      id: "override_released"
+
+    # Trigger 5: Direct MQTT event published by BatMon (optional alternate trigger)
+    # - platform: mqtt
+    #   topic: "batmon/my_device_placeholder/event"
+    #   id: "mqtt_event"
+
+  condition:
+    # 1. Master automation switch must be ON (if helper exists)
+    - condition: template
+      value_template: >-
+        {{ is_state('input_boolean.batmon_charging_automation', 'on')
+           or states('input_boolean.batmon_charging_automation') == 'unknown' }}
+
+    # 2. Manual override must be OFF
+    - condition: template
+      value_template: >-
+        {{ is_state('input_boolean.batmon_manual_override', 'off')
+           or states('input_boolean.batmon_manual_override') == 'unknown' }}
+
+    # 3. Target smart plug must be available
+    - condition: template
+      value_template: >-
+        {{ states('switch.smart_plug_charger_placeholder') not in ['unavailable', 'unknown'] }}
+
+    # 4. BatMon battery sensor must be valid and numeric
+    - condition: template
+      value_template: >-
+        {{ states('sensor.batmon_my_device_battery') not in ['unavailable', 'unknown']
+           and states('sensor.batmon_my_device_battery') | int(default=-1) >= 0 }}
+
+    # 5. Device must be online (not offline/stale)
+    - condition: template
+      value_template: >-
+        {{ states('binary_sensor.batmon_my_device_availability') != 'off' }}
+
+    # 6. STALE DATA PROTECTION: Battery reading must not be older than 30 minutes (1800s)
+    # Never turn on a charger solely based on stale data.
+    - condition: template
+      value_template: >-
+        {% set last_updated = as_timestamp(states.sensor.batmon_my_device_battery.last_updated, default=0) %}
+        {% set age_seconds = as_timestamp(now()) - last_updated %}
+        {{ age_seconds < 1800 }}
+
+  action:
+    - choose:
+        # ----------------------------------------------------------------------
+        # ACTION 1: Turn Charger ON (Battery <= 45% and Switch is currently OFF)
+        # ----------------------------------------------------------------------
+        - conditions:
+            - condition: template
+              value_template: >-
+                {{ (states('sensor.batmon_my_device_battery') | int) <= 45 }}
+            # AVOID REPEATED COMMANDS: Only command if switch is OFF
+            - condition: state
+              entity_id: switch.smart_plug_charger_placeholder
+              state: "off"
+          sequence:
+            - service: switch.turn_on
+              target:
+                entity_id: switch.smart_plug_charger_placeholder
+            - delay: "00:00:05"
+            # Verify switch state
+            - if:
+                - condition: state
+                  entity_id: switch.smart_plug_charger_placeholder
+                  state: "off"
+              then:
+                - service: persistent_notification.create
+                  data:
+                    title: "BatMon Charging Alert"
+                    message: "Failed to turn ON switch.smart_plug_charger_placeholder for BatMon device (battery <= 45%)."
+                    notification_id: "batmon_switch_on_failed"
+
+        # ----------------------------------------------------------------------
+        # ACTION 2: Turn Charger OFF (Battery >= 80% and Switch is currently ON)
+        # ----------------------------------------------------------------------
+        - conditions:
+            - condition: template
+              value_template: >-
+                {{ (states('sensor.batmon_my_device_battery') | int) >= 80 }}
+            # AVOID REPEATED COMMANDS: Only command if switch is ON
+            - condition: state
+              entity_id: switch.smart_plug_charger_placeholder
+              state: "on"
+          sequence:
+            - service: switch.turn_off
+              target:
+                entity_id: switch.smart_plug_charger_placeholder
+            - delay: "00:00:05"
+            # Verify switch state
+            - if:
+                - condition: state
+                  entity_id: switch.smart_plug_charger_placeholder
+                  state: "on"
+              then:
+                - service: persistent_notification.create
+                  data:
+                    title: "BatMon Charging Alert"
+                    message: "Failed to turn OFF switch.smart_plug_charger_placeholder for BatMon device (battery >= 80%)."
+                    notification_id: "batmon_switch_off_failed"
