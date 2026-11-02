@@ -27,6 +27,14 @@ Many Android devices—such as wall-mounted dashboard tablets, dedicated smart h
 3. **Hardware Health Protection:** Protects retired and dedicated Android hardware from thermal stress and battery damage, safely extending their operational lifespan.
 4. **Standalone & Connected Flexibility:** Works as an autonomous local battery monitor with threshold notifications, or as a connected sensor node in your home automation setup.
 
+## Download
+
+Get the latest APK from the [GitHub Releases](https://github.com/sunilsankar/BatMon/releases) page:
+
+- **Latest Release APK:** [Download from Releases](https://github.com/sunilsankar/BatMon/releases/latest)
+- Transfer or download the APK directly onto your Android device and install it.
+- BatMon includes an **In-App Updater** (navigate to **Settings → About BatMon → Check Updates**) to automatically notify and update to future releases.
+
 ## Features
 
 - **Modern Jetpack Compose UI:** Material 3 design with light/dark theme support, smooth typography, and responsive layouts tailored for phones and tablets in both portrait and landscape orientations.
