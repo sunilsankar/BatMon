@@ -149,14 +149,38 @@ class MqttPublisherTest {
         val authEx5 = MqttException(MqttException.REASON_CODE_NOT_AUTHORIZED.toInt())
         val timeoutEx = MqttException(MqttException.REASON_CODE_CLIENT_TIMEOUT.toInt())
 
-        assertEquals(
-            "Broker reached, but authentication failed (check username/password)",
-            publisher.sanitizeError(authEx4, "my_pw")
+        val msg4 = publisher.sanitizeError(
+            e = authEx4,
+            password = "secret_password",
+            username = "homeassistant",
+            clientId = "mqtt-batmon-test"
         )
-        assertEquals(
-            "Broker reached, but authentication failed (check username/password)",
-            publisher.sanitizeError(authEx5, "my_pw")
+        assertTrue(msg4.contains("rc 4"))
+        assertTrue(msg4.contains("user: \"homeassistant\""))
+        assertTrue(msg4.contains("password: 15 chars"))
+        assertFalse(msg4.contains("secret_password"))
+
+        val msg5 = publisher.sanitizeError(
+            e = authEx5,
+            password = "secret_password",
+            username = "homeassistant",
+            clientId = "mqtt-batmon-test",
+            anonymousProbeResult = true
         )
+        assertTrue(msg5.contains("rc 5"))
+        assertTrue(msg5.contains("not authorised"))
+        assertTrue(msg5.contains("Probe: broker permits anonymous"))
+        assertFalse(msg5.contains("secret_password"))
+
+        val msg5AnonRefused = publisher.sanitizeError(
+            e = authEx5,
+            password = "secret_password",
+            username = "homeassistant",
+            clientId = "mqtt-batmon-test",
+            anonymousProbeResult = false
+        )
+        assertTrue(msg5AnonRefused.contains("Probe: anonymous also refused"))
+
         assertTrue(
             publisher.sanitizeError(timeoutEx, "my_pw").contains("Timed out")
         )

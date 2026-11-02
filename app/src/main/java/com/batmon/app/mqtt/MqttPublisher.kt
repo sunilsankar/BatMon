@@ -4,6 +4,7 @@ import android.util.Log
 import com.batmon.app.battery.BatteryState
 import com.batmon.app.data.BatMonSettings
 import com.batmon.app.util.safeMessage
+import com.batmon.app.util.trimBlanks
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -30,7 +31,8 @@ sealed interface MqttConnectionStatus {
 private class PahoMqttClient(
     serverUri: String,
     clientId: String,
-    settings: BatMonSettings
+    settings: BatMonSettings,
+    anonymous: Boolean = false
 ) {
     private val client = MqttClient(
         serverUri,
@@ -45,9 +47,9 @@ private class PahoMqttClient(
         keepAliveInterval = 60
         isAutomaticReconnect = true
 
-        val username = settings.mqtt.username.trim()
-        val password = settings.mqtt.password.trim()
-        if (username.isNotEmpty()) {
+        val username = settings.mqtt.username.trimBlanks()
+        val password = settings.mqtt.password.trimBlanks()
+        if (!anonymous && username.isNotEmpty()) {
             userName = username
             this.password = password.toCharArray()
         }
@@ -91,21 +93,64 @@ class MqttPublisher {
         }
     }
 
-    internal fun sanitizeError(e: Throwable, password: String): String {
+    internal fun sanitizeError(
+        e: Throwable,
+        password: String,
+        username: String = "",
+        clientId: String = "",
+        anonymousProbeResult: Boolean? = null
+    ): String {
         if (e is MqttException) {
             val code = e.reasonCode
             if (code == MqttException.REASON_CODE_FAILED_AUTHENTICATION.toInt() ||
                 code == MqttException.REASON_CODE_NOT_AUTHORIZED.toInt()
             ) {
-                return "Broker reached, but authentication failed (check username/password)"
+                return buildAuthErrorMessage(code, username, password, clientId, anonymousProbeResult)
             }
         }
 
         var result = e.safeMessage()
-        if (password.isNotBlank()) {
-            result = result.replace(password, "******")
+        val rawPassword = password.trimBlanks()
+        if (rawPassword.isNotBlank()) {
+            result = result.replace(rawPassword, "******")
         }
         return result
+    }
+
+    internal fun buildAuthErrorMessage(
+        reasonCode: Int,
+        username: String = "",
+        password: String = "",
+        clientId: String = "",
+        anonymousProbeResult: Boolean? = null
+    ): String {
+        val rcText = if (reasonCode == MqttException.REASON_CODE_FAILED_AUTHENTICATION.toInt()) {
+            "Broker rejected username/password (rc 4)"
+        } else {
+            "Broker refused connection: not authorised (rc 5)"
+        }
+
+        val trimmedUser = username.trimBlanks()
+        val trimmedPass = password.trimBlanks()
+        val details = buildString {
+            if (trimmedUser.isNotEmpty()) {
+                append("user: \"$trimmedUser\", password: ${trimmedPass.length} chars")
+                if (password.length != trimmedPass.length) append(" (blanks trimmed)")
+            } else {
+                append("anonymous")
+            }
+            if (clientId.isNotEmpty()) {
+                append(", client ID: $clientId")
+            }
+        }
+
+        val probeText = when (anonymousProbeResult) {
+            true -> " — Probe: broker permits anonymous (user missing from password file or password differs)"
+            false -> " — Probe: anonymous also refused"
+            null -> ""
+        }
+
+        return "$rcText [$details]$probeText"
     }
 
     private fun resolveServerUri(settings: BatMonSettings): String {
@@ -115,11 +160,15 @@ class MqttPublisher {
     }
 
     private fun computeConfigKey(settings: BatMonSettings, serverUri: String, clientId: String): String {
-        return "$serverUri|$clientId|${settings.mqtt.username.trim()}|${settings.mqtt.password.trim()}"
+        return "$serverUri|$clientId|${settings.mqtt.username.trimBlanks()}|${settings.mqtt.password.trimBlanks()}"
     }
 
-    private fun createClient(settings: BatMonSettings, serverUri: String, clientId: String) =
-        PahoMqttClient(serverUri, clientId, settings)
+    private fun createClient(
+        settings: BatMonSettings,
+        serverUri: String,
+        clientId: String,
+        anonymous: Boolean = false
+    ) = PahoMqttClient(serverUri, clientId, settings, anonymous)
 
     suspend fun publishState(
         batteryState: BatteryState,
@@ -163,7 +212,12 @@ class MqttPublisher {
                 _status.value = MqttConnectionStatus.Connected
                 Result.success(Unit)
             } catch (e: Exception) {
-                val safeMsg = sanitizeError(e, settings.mqtt.password)
+                val safeMsg = sanitizeError(
+                    e = e,
+                    password = settings.mqtt.password,
+                    username = settings.mqtt.username,
+                    clientId = settings.mqtt.effectiveClientId(settings.deviceId)
+                )
                 Log.w("MqttPublisher", "Failed to publish state: $safeMsg")
                 _status.value = MqttConnectionStatus.Error(safeMsg)
                 Result.failure(Exception(safeMsg))
@@ -208,7 +262,12 @@ class MqttPublisher {
                 _status.value = MqttConnectionStatus.Connected
                 Result.success(Unit)
             } catch (e: Exception) {
-                val safeMsg = sanitizeError(e, settings.mqtt.password)
+                val safeMsg = sanitizeError(
+                    e = e,
+                    password = settings.mqtt.password,
+                    username = settings.mqtt.username,
+                    clientId = settings.mqtt.effectiveClientId(settings.deviceId)
+                )
                 Log.w("MqttPublisher", "Failed to publish event: $safeMsg")
                 _status.value = MqttConnectionStatus.Error(safeMsg)
                 Result.failure(Exception(safeMsg))
@@ -241,7 +300,12 @@ class MqttPublisher {
 
                 Result.success(Unit)
             } catch (e: Exception) {
-                val safeMsg = sanitizeError(e, settings.mqtt.password)
+                val safeMsg = sanitizeError(
+                    e = e,
+                    password = settings.mqtt.password,
+                    username = settings.mqtt.username,
+                    clientId = settings.mqtt.effectiveClientId(settings.deviceId)
+                )
                 Log.w("MqttPublisher", "Failed to publish discovery: $safeMsg")
                 Result.failure(Exception(safeMsg))
             }
@@ -398,12 +462,43 @@ class MqttPublisher {
 
             testClient.disconnect()
 
-            val username = settings.mqtt.username.trim()
-            val authInfo = if (username.isNotEmpty()) "Authenticated as $username" else "Anonymous"
+            val username = settings.mqtt.username.trimBlanks()
+            val authInfo = if (username.isNotEmpty()) {
+                "Authenticated as $username"
+            } else {
+                if (settings.mqtt.password.trimBlanks().isNotEmpty()) {
+                    "Anonymous (warning: password configured but username is blank)"
+                } else {
+                    "Anonymous"
+                }
+            }
             Result.success("Connected to $host:$port ($authInfo)")
         } catch (e: Exception) {
             try { testClient.disconnect() } catch (_: Exception) {}
-            val safeMessage = sanitizeError(e, settings.mqtt.password)
+
+            var anonymousProbeResult: Boolean? = null
+            if (e is MqttException &&
+                (e.reasonCode == MqttException.REASON_CODE_FAILED_AUTHENTICATION.toInt() ||
+                 e.reasonCode == MqttException.REASON_CODE_NOT_AUTHORIZED.toInt()) &&
+                settings.mqtt.username.trimBlanks().isNotEmpty()
+            ) {
+                try {
+                    val anonClient = createClient(settings, serverUri, "batmon-anon-probe", anonymous = true)
+                    anonClient.connect()
+                    anonymousProbeResult = anonClient.isConnected
+                    try { anonClient.disconnect() } catch (_: Exception) {}
+                } catch (_: Exception) {
+                    anonymousProbeResult = false
+                }
+            }
+
+            val safeMessage = sanitizeError(
+                e = e,
+                password = settings.mqtt.password,
+                username = settings.mqtt.username,
+                clientId = clientId,
+                anonymousProbeResult = anonymousProbeResult
+            )
             Result.failure(Exception(safeMessage))
         }
     }

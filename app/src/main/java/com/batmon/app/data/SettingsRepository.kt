@@ -11,6 +11,7 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import androidx.datastore.preferences.core.longPreferencesKey
 import com.batmon.app.battery.ThresholdState
+import com.batmon.app.util.trimBlanks
 import com.batmon.app.webhooks.WebhookSettings
 import com.batmon.app.webhooks.toJson
 import com.batmon.app.webhooks.toWebhookSettings
@@ -131,8 +132,8 @@ class SettingsRepository(private val context: Context) {
                     enabled = preferences[PreferencesKeys.MQTT_ENABLED] ?: false,
                     host = (preferences[PreferencesKeys.MQTT_HOST] ?: "").trim(),
                     port = preferences[PreferencesKeys.MQTT_PORT] ?: 1883,
-                    username = (preferences[PreferencesKeys.MQTT_USERNAME] ?: "").trim(),
-                    password = (preferences[PreferencesKeys.MQTT_PASSWORD] ?: "").trim(),
+                    username = (preferences[PreferencesKeys.MQTT_USERNAME] ?: "").trimBlanks(),
+                    password = (preferences[PreferencesKeys.MQTT_PASSWORD] ?: "").trimBlanks(),
                     topicPrefix = (preferences[PreferencesKeys.MQTT_TOPIC_PREFIX] ?: "batmon").trim(),
                     discoveryEnabled = preferences[PreferencesKeys.MQTT_DISCOVERY_ENABLED] ?: true
                 ),
@@ -225,8 +226,8 @@ class SettingsRepository(private val context: Context) {
             preferences[PreferencesKeys.MQTT_ENABLED] = mqtt.enabled
             preferences[PreferencesKeys.MQTT_HOST] = mqtt.host.trim()
             preferences[PreferencesKeys.MQTT_PORT] = mqtt.port
-            preferences[PreferencesKeys.MQTT_USERNAME] = mqtt.username.trim()
-            preferences[PreferencesKeys.MQTT_PASSWORD] = mqtt.password.trim()
+            preferences[PreferencesKeys.MQTT_USERNAME] = mqtt.username.trimBlanks()
+            preferences[PreferencesKeys.MQTT_PASSWORD] = mqtt.password.trimBlanks()
             preferences[PreferencesKeys.MQTT_TOPIC_PREFIX] = mqtt.topicPrefix.trim()
             preferences[PreferencesKeys.MQTT_DISCOVERY_ENABLED] = mqtt.discoveryEnabled
         }

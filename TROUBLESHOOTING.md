@@ -97,10 +97,28 @@ This guide covers initial setup, Home Assistant integration, and troubleshooting
 
 ### C. MQTT Connection Fails
 - **Authentication Failure (`NOT_AUTHORIZED` / code 4 or 5):**
-  - Verify that the username and password match your broker's configuration. Note that Mosquitto usernames and passwords are case-sensitive.
-  - In Mosquitto, verify that the user exists in `password_file` and has ACL read/write permissions for topic prefix `${mqttTopicPrefix}_#`.
-  - If your broker has `allow_anonymous false`, a username and password must be configured in BatMon.
-  - BatMon automatically trims leading/trailing spaces from username and password to prevent keyboard auto-spacing issues.
+  - **Password Visibility:** Tap the eye icon next to the Password field in Settings to visually confirm the typed password matches your intended password (no autocorrected or missing characters).
+  - **Reason Code Details:** BatMon's connection test displays the broker return code and sent credentials summary:
+    - **rc 4:** Bad username or password. The broker checked the password file and the password did not match.
+    - **rc 5:** Not authorised. Mosquitto returns rc 5 when the username is missing from `password_file`, when the user is not permitted by `acl_file`, or when anonymous access is disallowed.
+    - **Probe Verdict:** If BatMon receives rc 4/5, it tests whether the broker permits anonymous connections:
+      - `Probe: broker permits anonymous`: The broker accepts connections without credentials. The configured username is missing from the broker's password file, or credentials are not required.
+      - `Probe: anonymous also refused`: The broker enforces authentication (`allow_anonymous false`) and rejected the credentials.
+  - **Mosquitto Docker Container Troubleshooting:**
+    ```bash
+    # 1. Inspect live broker logs to see why the client was refused:
+    docker logs <mosquitto-container-name> --tail 50 | grep -i "authorised"
+
+    # 2. Add or update user in Mosquitto's password file:
+    docker exec -it <mosquitto-container-name> mosquitto_passwd -b /mosquitto/config/pwfile <username> <password>
+
+    # 3. Reload Mosquitto to apply password file changes without downtime:
+    docker kill -s HUP <mosquitto-container-name>
+
+    # 4. Verify credentials from the command line:
+    mosquitto_sub -h 192.168.1.15 -p 1883 -u <username> -P <password> -t "batmon_#" -d
+    ```
+  - **Whitespace:** BatMon uses `trimBlanks()` (mirroring Mosquitto's `misc__trimblanks`) to strip only ASCII space and tab, preserving any intended Unicode characters.
 - **Unreachable Broker (`Cannot reach <host>:<port>`):**
   - Ensure you specify the broker's LAN IP (e.g., `192.168.1.15`) or reachable hostname. Do not use `localhost` (which refers to the Android device itself).
   - Verify your Android device is on the same local network / Wi-Fi subnet and that port 1883 is open in the broker host's firewall.

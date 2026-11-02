@@ -53,17 +53,20 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import kotlin.math.roundToInt
 import com.batmon.app.data.BatMonSettings
 import com.batmon.app.data.MqttSettings
 import com.batmon.app.diagnostics.DiagnosticsInfo
+import com.batmon.app.util.trimBlanks
 import com.batmon.app.webhooks.DeliveryStatus
 import com.batmon.app.webhooks.WebhookEvent
 import com.batmon.app.webhooks.WebhookEventConfig
@@ -445,13 +448,14 @@ fun MqttSettingsCard(
     var password by remember(settings.mqtt.password) { mutableStateOf(settings.mqtt.password) }
     var topicPrefix by remember(settings.mqtt.topicPrefix) { mutableStateOf(settings.mqtt.topicPrefix) }
     var discoveryEnabled by remember(settings.mqtt.discoveryEnabled) { mutableStateOf(settings.mqtt.discoveryEnabled) }
+    var passwordVisible by remember { mutableStateOf(false) }
 
     fun currentMqtt(): MqttSettings = MqttSettings(
         enabled = enabled,
         host = host.trim(),
         port = portText.trim().toIntOrNull() ?: 1883,
-        username = username.trim(),
-        password = password.trim(),
+        username = username.trimBlanks(),
+        password = password.trimBlanks(),
         topicPrefix = topicPrefix.trim(),
         discoveryEnabled = discoveryEnabled
     )
@@ -532,7 +536,17 @@ fun MqttSettingsCard(
                     value = password,
                     onValueChange = { password = it },
                     label = { Text("Password (optional)") },
-                    visualTransformation = PasswordVisualTransformation(),
+                    visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                    trailingIcon = if (password.isNotEmpty()) {
+                        {
+                            IconButton(onClick = { passwordVisible = !passwordVisible }) {
+                                Icon(
+                                    painter = painterResource(android.R.drawable.ic_menu_view),
+                                    contentDescription = if (passwordVisible) "Hide password" else "Show password"
+                                )
+                            }
+                        }
+                    } else null,
                     keyboardOptions = KeyboardOptions(
                         capitalization = KeyboardCapitalization.None,
                         autoCorrect = false,
