@@ -1,6 +1,7 @@
 package com.batmon.app.ui.settings
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -53,6 +54,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -639,23 +641,7 @@ fun MqttSettingsCard(
                 }
 
                 mqttTestStatus?.let { status ->
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = CardDefaults.cardColors(
-                            containerColor = if (status.startsWith("Connected to") || status.startsWith("Success") || status.contains("successfully"))
-                                MaterialTheme.colorScheme.primaryContainer
-                            else if (status.startsWith("Cannot reach") || status.startsWith("Broker reached, but authentication failed") || status.startsWith("Failed") || status.contains("error"))
-                                MaterialTheme.colorScheme.errorContainer
-                            else
-                                MaterialTheme.colorScheme.surfaceVariant
-                        )
-                    ) {
-                        Text(
-                            text = status,
-                            modifier = Modifier.padding(12.dp),
-                            style = MaterialTheme.typography.bodySmall
-                        )
-                    }
+                    StatusFeedbackCard(status = status)
                 }
 
                 Row(
@@ -1009,23 +995,7 @@ fun WebhooksSettingsCard(
                 }
 
                 webhookTestStatus?.let { status ->
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = CardDefaults.cardColors(
-                            containerColor = if (status.startsWith("Success"))
-                                MaterialTheme.colorScheme.primaryContainer
-                            else if (status.startsWith("Failed"))
-                                MaterialTheme.colorScheme.errorContainer
-                            else
-                                MaterialTheme.colorScheme.surfaceVariant
-                        )
-                    ) {
-                        Text(
-                            text = status,
-                            modifier = Modifier.padding(10.dp),
-                            style = MaterialTheme.typography.bodySmall
-                        )
-                    }
+                    StatusFeedbackCard(status = status)
                 }
 
                 Row(
@@ -1373,5 +1343,40 @@ private fun AboutCard(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun StatusFeedbackCard(
+    status: String,
+    modifier: Modifier = Modifier
+) {
+    val isDark = isSystemInDarkTheme()
+    val isSuccess = status.startsWith("Connected to") || status.startsWith("Success") || status.contains("successfully")
+    val isFailure = status.startsWith("Cannot reach") || status.startsWith("Broker") || status.startsWith("Failed") || status.contains("error") || status.contains("refused") || status.contains("failed")
+
+    val containerColor = when {
+        isSuccess -> if (isDark) Color(0xFF1B381E) else Color(0xFFE8F5E9)
+        isFailure -> MaterialTheme.colorScheme.errorContainer
+        else -> MaterialTheme.colorScheme.surfaceVariant
+    }
+    val contentColor = when {
+        isSuccess -> if (isDark) Color(0xFFA5D6A7) else Color(0xFF1B5E20)
+        isFailure -> MaterialTheme.colorScheme.onErrorContainer
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
+
+    Card(
+        modifier = modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = containerColor,
+            contentColor = contentColor
+        )
+    ) {
+        Text(
+            text = status,
+            modifier = Modifier.padding(12.dp),
+            style = MaterialTheme.typography.bodySmall
+        )
     }
 }

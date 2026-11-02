@@ -66,7 +66,7 @@ object MqttPayloadFactory {
         readings["is_charging"] = if (batteryState.isCharging) "ON" else "OFF"
         readings["last_update"] = Instant.ofEpochMilli(timestampMs).toString()
         batteryState.temperatureCelsius?.let {
-            readings["temperature"] = it.toDouble().toString()
+            readings["temperature"] = String.format(java.util.Locale.US, "%.1f", it)
         }
         batteryState.health?.let {
             readings["health"] = it
@@ -103,6 +103,8 @@ object MqttPayloadFactory {
                 put("uniq_id", "${prefix}_${shortId}_$metricTag")
                 put("stat_t", "${prefix}_${shortId}/$metricTag")
                 put("avty_t", statusTopic)
+                put("pl_avail", "online")
+                put("pl_not_avail", "offline")
                 if (deviceClass != null) put("dev_cla", deviceClass)
                 if (stateClass != null) put("stat_cla", stateClass)
                 if (unitOfMeasurement != null) put("unit_of_meas", unitOfMeasurement)
@@ -174,6 +176,8 @@ object MqttPayloadFactory {
             put("uniq_id", "${prefix}_${shortId}_is_charging")
             put("stat_t", "${prefix}_${shortId}/is_charging")
             put("avty_t", statusTopic)
+            put("pl_avail", "online")
+            put("pl_not_avail", "offline")
             put("dev_cla", "battery_charging")
             put("pl_on", "ON")
             put("pl_off", "OFF")

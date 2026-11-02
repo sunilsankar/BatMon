@@ -187,7 +187,16 @@ class MqttPublisher {
                     IllegalStateException("MQTT client is null")
                 )
 
-                // 1. Publish scalar telemetry readings to individual metric topics
+                // 1. Re-assert online availability status retained so entities never stay stuck in offline/unavailable
+                val statusTopic = settings.mqtt.statusTopic(settings.deviceId)
+                activeClient.publish(
+                    topic = statusTopic,
+                    payload = "online".toByteArray(Charsets.UTF_8),
+                    qos = 1,
+                    retained = true
+                )
+
+                // 2. Publish scalar telemetry readings to individual metric topics (retained)
                 val readings = MqttPayloadFactory.buildMetricReadings(batteryState, timestampMs)
                 for ((tag, value) in readings) {
                     val topic = settings.mqtt.metricTopic(settings.deviceId, tag)
@@ -195,18 +204,18 @@ class MqttPublisher {
                         topic = topic,
                         payload = value.toByteArray(Charsets.UTF_8),
                         qos = 1,
-                        retained = false
+                        retained = true
                     )
                 }
 
-                // 2. Publish full JSON state topic
+                // 3. Publish full JSON state topic (retained)
                 val statePayload = MqttPayloadFactory.buildStatePayload(batteryState, settings, timestampMs)
                 val stateTopic = settings.mqtt.stateTopic(settings.deviceId)
                 activeClient.publish(
                     topic = stateTopic,
                     payload = statePayload.toByteArray(Charsets.UTF_8),
                     qos = 1,
-                    retained = false
+                    retained = true
                 )
 
                 _status.value = MqttConnectionStatus.Connected
@@ -425,11 +434,15 @@ class MqttPublisher {
                 retained = true
             )
 
-            // 3. Publish telemetry if battery state is available
-            val stateToPublish = batteryState ?: BatteryState(
+            // 3. Publish telemetry if battery state is available (retained)
+            val stateToPublish = batteryState?.let {
+                if (it.temperatureCelsius == null) it.copy(temperatureCelsius = 25.0f) else it
+            } ?: BatteryState(
                 percentage = 100,
                 chargingStatus = "Discharging",
                 isCharging = false,
+                temperatureCelsius = 25.0f,
+                health = "Good",
                 timestampMs = System.currentTimeMillis()
             )
             val readings = MqttPayloadFactory.buildMetricReadings(stateToPublish)
@@ -439,9 +452,19 @@ class MqttPublisher {
                     topic = topic,
                     payload = value.toByteArray(Charsets.UTF_8),
                     qos = 1,
-                    retained = false
+                    retained = true
                 )
             }
+
+            // Also publish state JSON retained during test
+            val statePayload = MqttPayloadFactory.buildStatePayload(stateToPublish, settings)
+            val stateTopic = settings.mqtt.stateTopic(settings.deviceId)
+            testClient.publish(
+                topic = stateTopic,
+                payload = statePayload.toByteArray(Charsets.UTF_8),
+                qos = 1,
+                retained = true
+            )
 
             // 4. Trigger Home Assistant Auto Discovery registration if enabled
             if (settings.mqtt.discoveryEnabled) {
