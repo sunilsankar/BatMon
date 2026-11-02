@@ -61,7 +61,7 @@ dependencies {
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.datastore.preferences)
     implementation(libs.androidx.work.runtime.ktx)
-    implementation(libs.paho.mqttv5)
+    implementation(libs.paho.mqttv3)
     implementation(libs.okhttp)
 
     implementation(platform(libs.androidx.compose.bom))

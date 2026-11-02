@@ -3,6 +3,7 @@ package com.batmon.app.mqtt
 import android.util.Log
 import com.batmon.app.battery.BatteryState
 import com.batmon.app.data.BatMonSettings
+import com.batmon.app.util.safeMessage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -10,6 +11,14 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import org.eclipse.paho.client.mqttv3.MqttClient
+import org.eclipse.paho.client.mqttv3.MqttConnectOptions
+import org.eclipse.paho.client.mqttv3.MqttException
+import org.eclipse.paho.client.mqttv3.MqttMessage
+import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence
+import java.io.IOException
+import java.net.InetSocketAddress
+import java.net.Socket
 
 sealed interface MqttConnectionStatus {
     data object Disconnected : MqttConnectionStatus
@@ -23,35 +32,34 @@ private class PahoMqttClient(
     clientId: String,
     settings: BatMonSettings
 ) {
-    private val client = org.eclipse.paho.mqttv5.client.MqttClient(
+    private val client = MqttClient(
         serverUri,
         clientId,
-        org.eclipse.paho.mqttv5.client.persist.MemoryPersistence()
+        MemoryPersistence()
     )
 
-    private val options = org.eclipse.paho.mqttv5.client.MqttConnectionOptions().apply {
-        isCleanStart = true
+    private val options = MqttConnectOptions().apply {
+        mqttVersion = MqttConnectOptions.MQTT_VERSION_3_1_1
+        isCleanSession = true
         connectionTimeout = 10
         keepAliveInterval = 60
         isAutomaticReconnect = true
-        if (settings.mqtt.username.isNotBlank()) {
-            userName = settings.mqtt.username.trim()
+
+        val username = settings.mqtt.username.trim()
+        val password = settings.mqtt.password.trim()
+        if (username.isNotEmpty()) {
+            userName = username
+            this.password = password.toCharArray()
         }
-        if (settings.mqtt.password.isNotBlank()) {
-            password = settings.mqtt.password.trim().toByteArray(Charsets.UTF_8)
-        }
-        val availabilityTopic = settings.mqtt.availabilityTopic(settings.deviceId)
-        val willMsg = org.eclipse.paho.mqttv5.common.MqttMessage("offline".toByteArray(Charsets.UTF_8)).apply {
-            qos = 1
-            isRetained = true
-        }
-        setWill(availabilityTopic, willMsg)
+
+        val statusTopic = settings.mqtt.statusTopic(settings.deviceId)
+        setWill(statusTopic, "offline".toByteArray(Charsets.UTF_8), 1, true)
     }
 
     fun connect() = client.connect(options)
 
     fun publish(topic: String, payload: ByteArray, qos: Int, retained: Boolean) {
-        val msg = org.eclipse.paho.mqttv5.common.MqttMessage(payload).apply {
+        val msg = MqttMessage(payload).apply {
             this.qos = qos
             isRetained = retained
         }
@@ -77,18 +85,23 @@ class MqttPublisher {
     private val _status = MutableStateFlow<MqttConnectionStatus>(MqttConnectionStatus.Disconnected)
     val status: StateFlow<MqttConnectionStatus> = _status.asStateFlow()
 
-    private fun sanitizeError(e: Throwable, password: String): String {
-        val reasonCode = when (e) {
-            is org.eclipse.paho.mqttv5.common.MqttException -> e.reasonCode
-            else -> null
+    private fun checkBrokerSocket(host: String, port: Int, timeoutMs: Int = 3000) {
+        Socket().use { socket ->
+            socket.connect(InetSocketAddress(host, port), timeoutMs)
+        }
+    }
+
+    internal fun sanitizeError(e: Throwable, password: String): String {
+        if (e is MqttException) {
+            val code = e.reasonCode
+            if (code == MqttException.REASON_CODE_FAILED_AUTHENTICATION.toInt() ||
+                code == MqttException.REASON_CODE_NOT_AUTHORIZED.toInt()
+            ) {
+                return "Broker reached, but authentication failed (check username/password)"
+            }
         }
 
-        if (reasonCode in listOf(4, 5, 134, 135)) {
-            val codeStr = if (reasonCode != null) " (code $reasonCode)" else ""
-            return "Not authorized to connect$codeStr: verify broker username, password, and ACL permissions for MQTT 5.0"
-        }
-
-        var result = e.message ?: "Unknown MQTT error"
+        var result = e.safeMessage()
         if (password.isNotBlank()) {
             result = result.replace(password, "******")
         }
@@ -96,14 +109,13 @@ class MqttPublisher {
     }
 
     private fun resolveServerUri(settings: BatMonSettings): String {
-        val scheme = if (settings.mqtt.useTls) "ssl" else "tcp"
         val host = settings.mqtt.host.trim()
         val port = settings.mqtt.port
-        return "$scheme://$host:$port"
+        return "tcp://$host:$port"
     }
 
     private fun computeConfigKey(settings: BatMonSettings, serverUri: String, clientId: String): String {
-        return "$serverUri|$clientId|${settings.mqtt.username}|${settings.mqtt.password}|${settings.mqtt.useTls}"
+        return "$serverUri|$clientId|${settings.mqtt.username.trim()}|${settings.mqtt.password.trim()}"
     }
 
     private fun createClient(settings: BatMonSettings, serverUri: String, clientId: String) =
@@ -126,14 +138,26 @@ class MqttPublisher {
                     IllegalStateException("MQTT client is null")
                 )
 
-                // Publish state
+                // 1. Publish scalar telemetry readings to individual metric topics
+                val readings = MqttPayloadFactory.buildMetricReadings(batteryState, timestampMs)
+                for ((tag, value) in readings) {
+                    val topic = settings.mqtt.metricTopic(settings.deviceId, tag)
+                    activeClient.publish(
+                        topic = topic,
+                        payload = value.toByteArray(Charsets.UTF_8),
+                        qos = 1,
+                        retained = false
+                    )
+                }
+
+                // 2. Publish full JSON state topic
                 val statePayload = MqttPayloadFactory.buildStatePayload(batteryState, settings, timestampMs)
                 val stateTopic = settings.mqtt.stateTopic(settings.deviceId)
                 activeClient.publish(
                     topic = stateTopic,
                     payload = statePayload.toByteArray(Charsets.UTF_8),
                     qos = 1,
-                    retained = settings.mqtt.retain
+                    retained = false
                 )
 
                 _status.value = MqttConnectionStatus.Connected
@@ -142,7 +166,7 @@ class MqttPublisher {
                 val safeMsg = sanitizeError(e, settings.mqtt.password)
                 Log.w("MqttPublisher", "Failed to publish state: $safeMsg")
                 _status.value = MqttConnectionStatus.Error(safeMsg)
-                Result.failure(e)
+                Result.failure(Exception(safeMsg))
             }
         }
     }
@@ -187,7 +211,7 @@ class MqttPublisher {
                 val safeMsg = sanitizeError(e, settings.mqtt.password)
                 Log.w("MqttPublisher", "Failed to publish event: $safeMsg")
                 _status.value = MqttConnectionStatus.Error(safeMsg)
-                Result.failure(e)
+                Result.failure(Exception(safeMsg))
             }
         }
     }
@@ -219,12 +243,14 @@ class MqttPublisher {
             } catch (e: Exception) {
                 val safeMsg = sanitizeError(e, settings.mqtt.password)
                 Log.w("MqttPublisher", "Failed to publish discovery: $safeMsg")
-                Result.failure(e)
+                Result.failure(Exception(safeMsg))
             }
         }
     }
 
     private fun ensureConnected(settings: BatMonSettings) {
+        val host = settings.mqtt.host.trim()
+        val port = settings.mqtt.port
         val serverUri = resolveServerUri(settings)
         val clientId = settings.mqtt.effectiveClientId(settings.deviceId)
         val currentConfigKey = computeConfigKey(settings, serverUri, clientId)
@@ -235,14 +261,24 @@ class MqttPublisher {
 
         disconnectInternal()
 
+        // 1. Pre-flight TCP socket reachability check
+        try {
+            checkBrokerSocket(host, port, 3000)
+            Log.i("MqttPublisher", "Internet connectivity to MQTT broker $host at port $port available")
+        } catch (e: Exception) {
+            val msg = "Cannot reach $host:$port (check IP/port/Wi-Fi)"
+            Log.w("MqttPublisher", msg)
+            throw IOException(msg, e)
+        }
+
         _status.value = MqttConnectionStatus.Connecting
         val newClient = createClient(settings, serverUri, clientId)
         newClient.connect()
 
-        // Publish availability online immediately
-        val availabilityTopic = settings.mqtt.availabilityTopic(settings.deviceId)
+        // 2. Publish online availability status retained
+        val statusTopic = settings.mqtt.statusTopic(settings.deviceId)
         newClient.publish(
-            topic = availabilityTopic,
+            topic = statusTopic,
             payload = "online".toByteArray(Charsets.UTF_8),
             qos = 1,
             retained = true
@@ -252,7 +288,7 @@ class MqttPublisher {
         activeConfigKey = currentConfigKey
         _status.value = MqttConnectionStatus.Connected
 
-        // Publish discovery on initial connection
+        // 3. Publish Home Assistant auto-discovery if enabled
         if (settings.mqtt.discoveryEnabled) {
             val entities = MqttPayloadFactory.buildDiscoveryEntities(settings)
             for (entity in entities) {
@@ -292,8 +328,19 @@ class MqttPublisher {
         settings: BatMonSettings,
         batteryState: BatteryState? = null
     ): Result<String> = withContext(Dispatchers.IO) {
-        if (settings.mqtt.host.isBlank()) {
+        val host = settings.mqtt.host.trim()
+        val port = settings.mqtt.port
+        if (host.isBlank()) {
             return@withContext Result.failure(IllegalArgumentException("Broker host cannot be blank"))
+        }
+
+        // 1. Pre-flight TCP reachability check
+        try {
+            checkBrokerSocket(host, port, 3000)
+            Log.i("MqttPublisher", "Internet connectivity to MQTT broker $host at port $port available")
+        } catch (e: Exception) {
+            val msg = "Cannot reach $host:$port (check IP/port/Wi-Fi)"
+            return@withContext Result.failure(IOException(msg, e))
         }
 
         val serverUri = resolveServerUri(settings)
@@ -305,32 +352,34 @@ class MqttPublisher {
                 return@withContext Result.failure(IllegalStateException("Could not establish connection to $serverUri"))
             }
 
-            // Publish availability (online)
-            val availabilityTopic = settings.mqtt.availabilityTopic(settings.deviceId)
+            // 2. Publish online to status topic
+            val statusTopic = settings.mqtt.statusTopic(settings.deviceId)
             testClient.publish(
-                topic = availabilityTopic,
+                topic = statusTopic,
                 payload = "online".toByteArray(Charsets.UTF_8),
                 qos = 1,
                 retained = true
             )
 
-            // Publish battery state
-            val stateTopic = settings.mqtt.stateTopic(settings.deviceId)
+            // 3. Publish telemetry if battery state is available
             val stateToPublish = batteryState ?: BatteryState(
                 percentage = 100,
                 chargingStatus = "Discharging",
                 isCharging = false,
                 timestampMs = System.currentTimeMillis()
             )
-            val statePayload = MqttPayloadFactory.buildStatePayload(stateToPublish, settings)
-            testClient.publish(
-                topic = stateTopic,
-                payload = statePayload.toByteArray(Charsets.UTF_8),
-                qos = 1,
-                retained = settings.mqtt.retain
-            )
+            val readings = MqttPayloadFactory.buildMetricReadings(stateToPublish)
+            for ((tag, value) in readings) {
+                val topic = settings.mqtt.metricTopic(settings.deviceId, tag)
+                testClient.publish(
+                    topic = topic,
+                    payload = value.toByteArray(Charsets.UTF_8),
+                    qos = 1,
+                    retained = false
+                )
+            }
 
-            // Best-effort Home Assistant auto-discovery
+            // 4. Trigger Home Assistant Auto Discovery registration if enabled
             if (settings.mqtt.discoveryEnabled) {
                 try {
                     val entities = MqttPayloadFactory.buildDiscoveryEntities(settings)
@@ -349,7 +398,9 @@ class MqttPublisher {
 
             testClient.disconnect()
 
-            Result.success("Connected & published test state to $stateTopic (MQTT 5.0)!")
+            val username = settings.mqtt.username.trim()
+            val authInfo = if (username.isNotEmpty()) "Authenticated as $username" else "Anonymous"
+            Result.success("Connected to $host:$port ($authInfo)")
         } catch (e: Exception) {
             try { testClient.disconnect() } catch (_: Exception) {}
             val safeMessage = sanitizeError(e, settings.mqtt.password)

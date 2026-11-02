@@ -6,6 +6,7 @@ import okhttp3.mockwebserver.MockWebServer
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -192,5 +193,31 @@ class WebhookDispatcherTest {
         assertFalse(sanitized.contains("SuperSecretPassword"))
         assertTrue(sanitized.contains("Bearer ***REDACTED***"))
         assertTrue(sanitized.contains("password=***REDACTED***"))
+    }
+
+    @Test
+    fun dispatch_malformedHeaderName_recordsPermanentFailureInsteadOfThrowing() = runBlocking {
+        val item = createItem().copy(headers = mapOf("Bad Header" to "value"))
+        queueRepository.enqueue(item)
+
+        val result = dispatcher.dispatch(item, allowInsecureHttp = true)
+
+        assertEquals(DeliveryStatus.FAILED_PERMANENT, result.status)
+        assertNotNull(result.lastError)
+        assertEquals(0, queueRepository.getPendingItems().size)
+    }
+
+    @Test
+    fun testDelivery_malformedHeaderName_failsWithNonNullMessageInsteadOfThrowing() = runBlocking {
+        val result = dispatcher.testDelivery(
+            url = server.url("/webhook").toString(),
+            method = "POST",
+            headers = "Bad Header: value",
+            payload = """{"event":"battery_low"}""",
+            allowInsecureHttp = true
+        )
+
+        assertTrue(result.isFailure)
+        assertNotNull(result.exceptionOrNull()?.message)
     }
 }

@@ -27,25 +27,41 @@ data class MqttSettings(
     val enabled: Boolean = false,
     val host: String = "",
     val port: Int = 1883,
-    val clientId: String = "",
     val username: String = "",
     val password: String = "",
-    val useTls: Boolean = false,
-    val topicPrefix: String = "",
-    val discoveryPrefix: String = "homeassistant",
-    val discoveryEnabled: Boolean = true,
-    val retain: Boolean = true
+    val topicPrefix: String = "batmon",
+    val discoveryEnabled: Boolean = true
 ) {
-    // ponytail: client ID derived from persistent deviceId, unique per install
+    fun deviceShortId(deviceId: String): String =
+        deviceId.removePrefix("batmon-").removePrefix("batmon_")
+            .replace(Regex("[^a-zA-Z0-9]"), "_")
+            .lowercase()
+
+    fun effectiveTopicPrefix(deviceId: String = ""): String {
+        val trimmed = topicPrefix.trim().trimEnd('/')
+        return if (trimmed.isNotBlank() && !trimmed.contains('/')) trimmed else "batmon"
+    }
+
+    // Spec: mqtt-$mqttTopicPrefix-$deviceShortId
     fun effectiveClientId(deviceId: String): String =
-        "batmon_${deviceId.removePrefix("batmon-").removePrefix("batmon_")}"
+        "mqtt-${effectiveTopicPrefix(deviceId)}-${deviceShortId(deviceId)}"
 
-    fun effectiveTopicPrefix(deviceId: String): String =
-        if (topicPrefix.isNotBlank()) topicPrefix.trimEnd('/') else "batmon/$deviceId"
+    // Per user decision: per-device availability topic
+    fun statusTopic(deviceId: String): String =
+        "${effectiveTopicPrefix(deviceId)}_${deviceShortId(deviceId)}/status"
 
-    fun stateTopic(deviceId: String): String = "${effectiveTopicPrefix(deviceId)}/state"
-    fun availabilityTopic(deviceId: String): String = "${effectiveTopicPrefix(deviceId)}/availability"
-    fun eventTopic(deviceId: String): String = "${effectiveTopicPrefix(deviceId)}/event"
+    fun availabilityTopic(deviceId: String): String = statusTopic(deviceId)
+
+    fun metricTopic(deviceId: String, metricTag: String): String =
+        "${effectiveTopicPrefix(deviceId)}_${deviceShortId(deviceId)}/$metricTag"
+
+    fun discoveryTopic(deviceId: String, metricTag: String): String =
+        "homeassistant/sensor/${effectiveTopicPrefix(deviceId)}_${deviceShortId(deviceId)}/$metricTag/config"
+
+    fun stateTopic(deviceId: String): String = metricTopic(deviceId, "state")
+
+    fun eventTopic(deviceId: String): String =
+        "${effectiveTopicPrefix(deviceId)}_${deviceShortId(deviceId)}/event"
 }
 
 data class BatMonSettings(
@@ -113,16 +129,12 @@ class SettingsRepository(private val context: Context) {
                 lastSyncTimestampMs = preferences[PreferencesKeys.LAST_SYNC_TIMESTAMP] ?: 0L,
                 mqtt = MqttSettings(
                     enabled = preferences[PreferencesKeys.MQTT_ENABLED] ?: false,
-                    host = preferences[PreferencesKeys.MQTT_HOST] ?: "",
+                    host = (preferences[PreferencesKeys.MQTT_HOST] ?: "").trim(),
                     port = preferences[PreferencesKeys.MQTT_PORT] ?: 1883,
-                    clientId = preferences[PreferencesKeys.MQTT_CLIENT_ID] ?: "",
-                    username = preferences[PreferencesKeys.MQTT_USERNAME] ?: "",
-                    password = preferences[PreferencesKeys.MQTT_PASSWORD] ?: "",
-                    useTls = preferences[PreferencesKeys.MQTT_USE_TLS] ?: false,
-                    topicPrefix = preferences[PreferencesKeys.MQTT_TOPIC_PREFIX] ?: "",
-                    discoveryPrefix = preferences[PreferencesKeys.MQTT_DISCOVERY_PREFIX] ?: "homeassistant",
-                    discoveryEnabled = preferences[PreferencesKeys.MQTT_DISCOVERY_ENABLED] ?: true,
-                    retain = preferences[PreferencesKeys.MQTT_RETAIN] ?: true
+                    username = (preferences[PreferencesKeys.MQTT_USERNAME] ?: "").trim(),
+                    password = (preferences[PreferencesKeys.MQTT_PASSWORD] ?: "").trim(),
+                    topicPrefix = (preferences[PreferencesKeys.MQTT_TOPIC_PREFIX] ?: "batmon").trim(),
+                    discoveryEnabled = preferences[PreferencesKeys.MQTT_DISCOVERY_ENABLED] ?: true
                 ),
                 webhooks = (preferences[PreferencesKeys.WEBHOOK_CONFIG_JSON] ?: "").toWebhookSettings()
             )
@@ -211,16 +223,12 @@ class SettingsRepository(private val context: Context) {
     suspend fun updateMqttSettings(mqtt: MqttSettings) {
         context.dataStore.edit { preferences ->
             preferences[PreferencesKeys.MQTT_ENABLED] = mqtt.enabled
-            preferences[PreferencesKeys.MQTT_HOST] = mqtt.host
+            preferences[PreferencesKeys.MQTT_HOST] = mqtt.host.trim()
             preferences[PreferencesKeys.MQTT_PORT] = mqtt.port
-            preferences[PreferencesKeys.MQTT_CLIENT_ID] = mqtt.clientId
-            preferences[PreferencesKeys.MQTT_USERNAME] = mqtt.username
-            preferences[PreferencesKeys.MQTT_PASSWORD] = mqtt.password
-            preferences[PreferencesKeys.MQTT_USE_TLS] = mqtt.useTls
-            preferences[PreferencesKeys.MQTT_TOPIC_PREFIX] = mqtt.topicPrefix
-            preferences[PreferencesKeys.MQTT_DISCOVERY_PREFIX] = mqtt.discoveryPrefix
+            preferences[PreferencesKeys.MQTT_USERNAME] = mqtt.username.trim()
+            preferences[PreferencesKeys.MQTT_PASSWORD] = mqtt.password.trim()
+            preferences[PreferencesKeys.MQTT_TOPIC_PREFIX] = mqtt.topicPrefix.trim()
             preferences[PreferencesKeys.MQTT_DISCOVERY_ENABLED] = mqtt.discoveryEnabled
-            preferences[PreferencesKeys.MQTT_RETAIN] = mqtt.retain
         }
     }
 

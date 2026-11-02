@@ -32,22 +32,25 @@ This guide covers initial setup, Home Assistant integration, and troubleshooting
 
 1. **Broker Configuration:**
    - In BatMon **Settings > MQTT / Home Assistant**:
-     - **Broker Host:** Enter your MQTT broker IP or hostname (e.g., `192.168.1.50` or `core-mosquitto`).
-     - **Port:** Default is `1883` for standard TCP, or `8883` for TLS.
-      - **Username & Password:** Enter your MQTT user credentials.
-      - **TLS:** Enable if your broker requires secure connections.
-      - **Protocol:** BatMon uses MQTT 5.0.
+     - **Broker Host:** Enter your MQTT broker IP or hostname (e.g., `192.168.1.15` or `core-mosquitto`).
+     - **Port:** Default is `1883` for standard TCP.
+     - **Username & Password:** Enter your MQTT credentials (if authentication is configured on the broker; leave blank for anonymous).
+     - **Protocol:** BatMon uses standard MQTT 3.1.1 via Eclipse Paho v3 (`tcp://<host>:<port>`).
 2. **Testing Connection:**
-   - Tap **"Test Connection"**. BatMon will connect, publish an availability ping, and report success or sanitized error details.
+   - Tap **"Test Connection"**. BatMon executes a pre-flight TCP reachability check, connects with `MqttConnectOptions`, publishes an availability ping to `${mqttTopicPrefix}_${deviceShortId}/status`, and reports feedback:
+     - `Connected to <host>:<port> (Authenticated as <username>)` or `(Anonymous)`
+     - `Cannot reach <host>:<port> (check IP/port/Wi-Fi)` if TCP socket fails within 3 seconds
+     - `Broker reached, but authentication failed (check username/password)` if broker returns reason codes 4 or 5
 3. **Auto-Discovery Entities:**
    - Ensure **"Enable Home Assistant Discovery"** is toggled ON.
    - Tap **"Publish HA Discovery Now"**.
-   - In Home Assistant, navigate to **Settings > Devices & Services > MQTT**. A new device `BatMon (<device_id>)` will appear with:
-     - `sensor.batmon_<device_id>_battery` (Battery percentage)
-     - `binary_sensor.batmon_<device_id>_charging` (Charging binary sensor)
-     - `binary_sensor.batmon_<device_id>_monitoring` (Monitoring status)
-     - `sensor.batmon_<device_id>_health` (Battery health)
-     - `sensor.batmon_<device_id>_last_update` (Timestamp of last sync)
+   - In Home Assistant, navigate to **Settings > Devices & Services > MQTT**. A new device `Batmon <model>` will appear with:
+     - `sensor.<prefix>_<device_id>_battery_level` (Battery percentage)
+     - `sensor.<prefix>_<device_id>_charging_status` (Charging status)
+     - `binary_sensor.<prefix>_<device_id>_is_charging` (Charging binary sensor)
+     - `sensor.<prefix>_<device_id>_temperature` (Battery temperature)
+     - `sensor.<prefix>_<device_id>_health` (Battery health)
+     - `sensor.<prefix>_<device_id>_last_update` (Timestamp of last sync)
 
 ---
 
@@ -93,9 +96,15 @@ This guide covers initial setup, Home Assistant integration, and troubleshooting
   - Visit [dontkillmyapp.com](https://dontkillmyapp.com) for device-specific instructions.
 
 ### C. MQTT Connection Fails
-- **Wrong Host/Port:** Ensure you specify the broker's IP or reachable LAN hostname. Do not use `localhost` (which refers to the Android device itself).
-- **TLS Certificate Verification:** BatMon strictly enforces TLS certificate verification. Self-signed certificates require importing into the Android system trust store or using plain TCP on a secure local network.
-- **Client ID Collision:** Ensure no other client is connected with the same Client ID.
+- **Authentication Failure (`NOT_AUTHORIZED` / code 4 or 5):**
+  - Verify that the username and password match your broker's configuration. Note that Mosquitto usernames and passwords are case-sensitive.
+  - In Mosquitto, verify that the user exists in `password_file` and has ACL read/write permissions for topic prefix `${mqttTopicPrefix}_#`.
+  - If your broker has `allow_anonymous false`, a username and password must be configured in BatMon.
+  - BatMon automatically trims leading/trailing spaces from username and password to prevent keyboard auto-spacing issues.
+- **Unreachable Broker (`Cannot reach <host>:<port>`):**
+  - Ensure you specify the broker's LAN IP (e.g., `192.168.1.15`) or reachable hostname. Do not use `localhost` (which refers to the Android device itself).
+  - Verify your Android device is on the same local network / Wi-Fi subnet and that port 1883 is open in the broker host's firewall.
+- **Client ID:** BatMon automatically generates a clean client ID `mqtt-<topicPrefix>-<deviceShortId>` to prevent broker client ID collisions.
 
 ### D. Smart Plug Not Switching
 - **Stale Data Safety Rejection:** If the battery sensor has not updated in > 30 minutes, the Home Assistant automation deliberately refuses to switch the plug to prevent improper charging based on stale data.
@@ -106,3 +115,5 @@ This guide covers initial setup, Home Assistant integration, and troubleshooting
 - **Insecure HTTP Blocked:** BatMon rejects `http://` URLs unless **Allow Insecure HTTP** is explicitly enabled in Settings.
 - **Server 4xx Errors:** Permanent client errors (400, 401, 404) are not retried indefinitely. Check your webhook endpoint URL and authentication headers.
 - **Offline / Transient Errors (5xx, Timeouts):** BatMon places failed requests into the durable queue and automatically retries with exponential backoff once connectivity is restored.
+- **Malformed Custom Header:** Header names cannot contain spaces (use `Content-Type`, not `Content Type`). An invalid header is reported as `Invalid request: ...` and is not retried.
+- **Error Shows an Exception Name Instead of "null":** Some Android network errors carry no message. BatMon now reports the exception type (e.g. `UnknownHostException`) so the cause is identifiable.

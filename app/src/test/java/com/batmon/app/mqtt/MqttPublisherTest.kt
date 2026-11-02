@@ -4,6 +4,7 @@ import com.batmon.app.battery.BatteryState
 import com.batmon.app.data.BatMonSettings
 import com.batmon.app.data.MqttSettings
 import kotlinx.coroutines.runBlocking
+import org.eclipse.paho.client.mqttv3.MqttException
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -54,14 +55,15 @@ class MqttPublisherTest {
     }
 
     @Test
-    fun testConnection_withUnreachableHost_redactsPasswordInErrorMessage() = runBlocking {
+    fun testConnection_withUnreachableHost_failsWithPreFlightSocketError() = runBlocking {
         val publisher = MqttPublisher()
         val secretPassword = "SuperSecretPassword123!"
         val settings = BatMonSettings(
             mqtt = MqttSettings(
                 enabled = true,
                 host = "127.0.0.1",
-                port = 19999, // Unused port, will immediately fail connection
+                port = 19999, // Unused port, fails raw TCP socket check
+                username = "batmon_user",
                 password = secretPassword
             )
         )
@@ -69,30 +71,12 @@ class MqttPublisherTest {
         val result = publisher.testConnection(settings)
         assertTrue(result.isFailure)
         val errorMsg = result.exceptionOrNull()?.message ?: ""
+        assertTrue(
+            "Error message should indicate unreachable socket: $errorMsg",
+            errorMsg.startsWith("Cannot reach 127.0.0.1:19999")
+        )
         assertFalse(
             "Error message must never contain the plaintext password",
-            errorMsg.contains(secretPassword)
-        )
-    }
-
-    @Test
-    fun testConnection_redactsPasswordOnFailure() = runBlocking {
-        val publisher = MqttPublisher()
-        val secretPassword = "Mqtt5Password999!"
-        val settings = BatMonSettings(
-            mqtt = MqttSettings(
-                enabled = true,
-                host = "127.0.0.1",
-                port = 19998,
-                password = secretPassword
-            )
-        )
-
-        val result = publisher.testConnection(settings)
-        assertTrue(result.isFailure)
-        val errorMsg = result.exceptionOrNull()?.message ?: ""
-        assertFalse(
-            "Error message must never contain the plaintext password in MQTT 5",
             errorMsg.contains(secretPassword)
         )
     }
@@ -114,51 +98,67 @@ class MqttPublisherTest {
     }
 
     @Test
-    fun effectiveTopicPrefix_whenBlank_defaultsToBatmonWithDeviceId() {
+    fun deviceShortId_stripsPrefixAndSanitizes() {
+        val mqtt = MqttSettings()
+        assertEquals("7f3a91c2", mqtt.deviceShortId("batmon-7f3a91c2"))
+        assertEquals("tablet1", mqtt.deviceShortId("batmon_tablet1"))
+        assertEquals("kitchen_pixel", mqtt.deviceShortId("kitchen_pixel"))
+        assertEquals("office_wall", mqtt.deviceShortId("office-wall"))
+    }
+
+    @Test
+    fun effectiveTopicPrefix_andTopics_followDsmr2MqttScheme() {
         val mqtt = MqttSettings(topicPrefix = "")
-        val prefix = mqtt.effectiveTopicPrefix("pixel_tablet")
-        assertEquals("batmon/pixel_tablet", prefix)
-        assertEquals("batmon/pixel_tablet/state", mqtt.stateTopic("pixel_tablet"))
-        assertEquals("batmon/pixel_tablet/event", mqtt.eventTopic("pixel_tablet"))
-        assertEquals("batmon/pixel_tablet/availability", mqtt.availabilityTopic("pixel_tablet"))
+        val prefix = mqtt.effectiveTopicPrefix()
+        assertEquals("batmon", prefix)
+        assertEquals("batmon_tablet1/status", mqtt.statusTopic("tablet1"))
+        assertEquals("batmon_tablet1/status", mqtt.availabilityTopic("tablet1"))
+        assertEquals("batmon_tablet1/battery_level", mqtt.metricTopic("tablet1", "battery_level"))
+        assertEquals("homeassistant/sensor/batmon_tablet1/battery_level/config", mqtt.discoveryTopic("tablet1", "battery_level"))
+        assertEquals("batmon_tablet1/state", mqtt.stateTopic("tablet1"))
+        assertEquals("batmon_tablet1/event", mqtt.eventTopic("tablet1"))
     }
 
     @Test
     fun effectiveTopicPrefix_whenCustom_usesCustomPrefix() {
-        val mqtt = MqttSettings(topicPrefix = "home/battery/tablet1")
-        val prefix = mqtt.effectiveTopicPrefix("tablet1")
-        assertEquals("home/battery/tablet1", prefix)
-        assertEquals("home/battery/tablet1/state", mqtt.stateTopic("tablet1"))
-        assertEquals("home/battery/tablet1/event", mqtt.eventTopic("tablet1"))
-        assertEquals("home/battery/tablet1/availability", mqtt.availabilityTopic("tablet1"))
+        val mqtt = MqttSettings(topicPrefix = "dsmr")
+        val prefix = mqtt.effectiveTopicPrefix()
+        assertEquals("dsmr", prefix)
+        assertEquals("dsmr_tablet1/status", mqtt.statusTopic("tablet1"))
+        assertEquals("dsmr_tablet1/battery_level", mqtt.metricTopic("tablet1", "battery_level"))
+        assertEquals("homeassistant/sensor/dsmr_tablet1/battery_level/config", mqtt.discoveryTopic("tablet1", "battery_level"))
     }
 
     @Test
-    fun effectiveTopicPrefix_whenTrailingSlash_trimsTrailingSlash() {
+    fun effectiveTopicPrefix_whenContainsSlash_resetsToDefault() {
         val mqtt = MqttSettings(topicPrefix = "batmon/tablet1/")
-        val prefix = mqtt.effectiveTopicPrefix("tablet1")
-        assertEquals("batmon/tablet1", prefix)
-        assertEquals("batmon/tablet1/state", mqtt.stateTopic("tablet1"))
+        assertEquals("batmon", mqtt.effectiveTopicPrefix())
     }
 
     @Test
-    fun effectiveClientId_autogeneratesCleanUniqueClientIdFromDeviceId() {
-        val mqtt = MqttSettings()
-        assertEquals("batmon_7f3a91c2", mqtt.effectiveClientId("batmon-7f3a91c2"))
-        assertEquals("batmon_tablet1", mqtt.effectiveClientId("batmon_tablet1"))
-        assertEquals("batmon_kitchen_pixel", mqtt.effectiveClientId("kitchen_pixel"))
-        assertEquals("batmon_office_wall", mqtt.effectiveClientId("office_wall"))
+    fun effectiveClientId_generatesPrefixedClientId() {
+        val mqtt = MqttSettings(topicPrefix = "batmon")
+        assertEquals("mqtt-batmon-7f3a91c2", mqtt.effectiveClientId("batmon-7f3a91c2"))
+        assertEquals("mqtt-batmon-tablet1", mqtt.effectiveClientId("batmon_tablet1"))
     }
 
     @Test
-    fun testConnection_withCustomBatteryStateAndUnreachableHost_failsSafely() = runBlocking {
+    fun sanitizeError_mapsAuthFailureCodes4And5() {
         val publisher = MqttPublisher()
-        val battery = BatteryState(percentage = 85, isCharging = true, chargingStatus = "Charging", timestampMs = 5000L)
-        val settings = BatMonSettings(
-            mqtt = MqttSettings(enabled = true, host = "127.0.0.1", port = 19999, password = "secret")
+        val authEx4 = MqttException(MqttException.REASON_CODE_FAILED_AUTHENTICATION.toInt())
+        val authEx5 = MqttException(MqttException.REASON_CODE_NOT_AUTHORIZED.toInt())
+        val timeoutEx = MqttException(MqttException.REASON_CODE_CLIENT_TIMEOUT.toInt())
+
+        assertEquals(
+            "Broker reached, but authentication failed (check username/password)",
+            publisher.sanitizeError(authEx4, "my_pw")
         )
-        val result = publisher.testConnection(settings, battery)
-        assertTrue(result.isFailure)
-        assertFalse(result.exceptionOrNull()?.message?.contains("secret") ?: false)
+        assertEquals(
+            "Broker reached, but authentication failed (check username/password)",
+            publisher.sanitizeError(authEx5, "my_pw")
+        )
+        assertTrue(
+            publisher.sanitizeError(timeoutEx, "my_pw").contains("Timed out")
+        )
     }
 }

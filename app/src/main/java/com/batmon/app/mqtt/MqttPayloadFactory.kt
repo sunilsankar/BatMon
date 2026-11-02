@@ -56,102 +56,133 @@ object MqttPayloadFactory {
         return json.toString()
     }
 
-    fun buildDiscoveryEntities(
-        settings: BatMonSettings
-    ): List<DiscoveryEntity> {
-        val deviceId = settings.deviceId
-        val sanitizedId = deviceId.replace(Regex("[^a-zA-Z0-9]"), "_").lowercase()
-        val discoveryPrefix = settings.mqtt.discoveryPrefix.trimEnd('/')
-        val stateTopic = settings.mqtt.stateTopic(deviceId)
-        val availabilityTopic = settings.mqtt.availabilityTopic(deviceId)
+    fun buildMetricReadings(
+        batteryState: BatteryState,
+        timestampMs: Long = System.currentTimeMillis()
+    ): Map<String, String> {
+        val readings = mutableMapOf<String, String>()
+        readings["battery_level"] = batteryState.percentage.toString()
+        readings["charging_status"] = batteryState.chargingStatus.lowercase()
+        readings["is_charging"] = if (batteryState.isCharging) "ON" else "OFF"
+        readings["last_update"] = Instant.ofEpochMilli(timestampMs).toString()
+        batteryState.temperatureCelsius?.let {
+            readings["temperature"] = it.toDouble().toString()
+        }
+        batteryState.health?.let {
+            readings["health"] = it
+        }
+        return readings
+    }
 
-        val deviceObj = JSONObject().apply {
-            put("identifiers", JSONArray().put("batmon_$sanitizedId"))
-            put("name", settings.deviceName)
-            put("model", "Android Battery Monitor")
-            put("manufacturer", "BatMon")
-            put("sw_version", "1.0.0")
+    fun buildDiscoveryEntities(
+        settings: BatMonSettings,
+        deviceModel: String = android.os.Build.MODEL?.takeIf { it.isNotBlank() } ?: settings.deviceName
+    ): List<DiscoveryEntity> {
+        val prefix = settings.mqtt.effectiveTopicPrefix(settings.deviceId)
+        val shortId = settings.mqtt.deviceShortId(settings.deviceId)
+        val statusTopic = settings.mqtt.statusTopic(settings.deviceId)
+
+        val devObj = JSONObject().apply {
+            put("ids", JSONArray().put("${prefix}_$shortId"))
+            put("name", "Batmon $deviceModel")
+            put("mdl", deviceModel)
+            put("mf", "Android Batmon")
         }
 
-        fun baseEntity(name: String, uniqueId: String): JSONObject {
-            return JSONObject().apply {
-                put("device", deviceObj)
-                put("availability_topic", availabilityTopic)
-                put("payload_available", "online")
-                put("payload_not_available", "offline")
-                put("state_topic", stateTopic)
+        fun sensorEntity(
+            metricTag: String,
+            name: String,
+            deviceClass: String? = null,
+            stateClass: String? = null,
+            unitOfMeasurement: String? = null,
+            entityCategory: String? = null,
+            icon: String? = null
+        ): DiscoveryEntity {
+            val json = JSONObject().apply {
                 put("name", name)
-                put("unique_id", uniqueId)
+                put("uniq_id", "${prefix}_${shortId}_$metricTag")
+                put("stat_t", "${prefix}_${shortId}/$metricTag")
+                put("avty_t", statusTopic)
+                if (deviceClass != null) put("dev_cla", deviceClass)
+                if (stateClass != null) put("stat_cla", stateClass)
+                if (unitOfMeasurement != null) put("unit_of_meas", unitOfMeasurement)
+                if (entityCategory != null) put("ent_cat", entityCategory)
+                if (icon != null) put("ic", icon)
+                put("dev", devObj)
             }
+            return DiscoveryEntity(
+                configTopic = "homeassistant/sensor/${prefix}_${shortId}/$metricTag/config",
+                payloadJson = json.toString()
+            )
         }
 
         val entities = mutableListOf<DiscoveryEntity>()
 
-        // 1. Battery Percentage Sensor
-        val batteryObj = baseEntity("Battery", "batmon_${sanitizedId}_battery").apply {
-            put("device_class", "battery")
-            put("state_class", "measurement")
-            put("unit_of_measurement", "%")
-            put("value_template", "{{ value_json.battery_percent }}")
-        }
+        // 1. battery_level
         entities.add(
-            DiscoveryEntity(
-                configTopic = "$discoveryPrefix/sensor/batmon_${sanitizedId}/battery/config",
-                payloadJson = batteryObj.toString()
+            sensorEntity(
+                metricTag = "battery_level",
+                name = "Battery Level",
+                deviceClass = "battery",
+                stateClass = "measurement",
+                unitOfMeasurement = "%"
             )
         )
 
-        // 2. Charging Binary Sensor
-        val chargingObj = baseEntity("Charging", "batmon_${sanitizedId}_charging").apply {
-            put("device_class", "battery_charging")
-            put("payload_on", "true")
-            put("payload_off", "false")
-            put("value_template", "{{ value_json.is_charging }}")
-        }
+        // 2. charging_status
         entities.add(
-            DiscoveryEntity(
-                configTopic = "$discoveryPrefix/binary_sensor/batmon_${sanitizedId}/charging/config",
-                payloadJson = chargingObj.toString()
+            sensorEntity(
+                metricTag = "charging_status",
+                name = "Charging Status"
             )
         )
 
-        // 3. Monitoring Diagnostic Binary Sensor
-        val monitoringObj = baseEntity("Monitoring", "batmon_${sanitizedId}_monitoring").apply {
-            put("entity_category", "diagnostic")
-            put("payload_on", "true")
-            put("payload_off", "false")
-            put("value_template", "{{ value_json.monitoring_enabled }}")
-        }
+        // 3. temperature
         entities.add(
-            DiscoveryEntity(
-                configTopic = "$discoveryPrefix/binary_sensor/batmon_${sanitizedId}/monitoring/config",
-                payloadJson = monitoringObj.toString()
+            sensorEntity(
+                metricTag = "temperature",
+                name = "Temperature",
+                deviceClass = "temperature",
+                stateClass = "measurement",
+                unitOfMeasurement = "°C"
             )
         )
 
-        // 4. Battery Health Sensor
-        val healthObj = baseEntity("Battery Health", "batmon_${sanitizedId}_health").apply {
-            put("entity_category", "diagnostic")
-            put("value_template", "{{ value_json.health | default('unknown') }}")
-            put("icon", "mdi:battery-heart-variant")
-        }
+        // 4. health
         entities.add(
-            DiscoveryEntity(
-                configTopic = "$discoveryPrefix/sensor/batmon_${sanitizedId}/health/config",
-                payloadJson = healthObj.toString()
+            sensorEntity(
+                metricTag = "health",
+                name = "Battery Health",
+                entityCategory = "diagnostic",
+                icon = "mdi:battery-heart-variant"
             )
         )
 
-        // 5. Last Update Sensor
-        val lastUpdateObj = baseEntity("Last Update", "batmon_${sanitizedId}_last_update").apply {
-            put("device_class", "timestamp")
-            put("entity_category", "diagnostic")
-            put("value_template", "{{ value_json.timestamp }}")
+        // 5. last_update
+        entities.add(
+            sensorEntity(
+                metricTag = "last_update",
+                name = "Last Update",
+                deviceClass = "timestamp",
+                entityCategory = "diagnostic"
+            )
+        )
+
+        // 6. is_charging (binary_sensor)
+        val binaryJson = JSONObject().apply {
+            put("name", "Charging")
+            put("uniq_id", "${prefix}_${shortId}_is_charging")
+            put("stat_t", "${prefix}_${shortId}/is_charging")
+            put("avty_t", statusTopic)
+            put("dev_cla", "battery_charging")
+            put("pl_on", "ON")
+            put("pl_off", "OFF")
+            put("dev", devObj)
         }
         entities.add(
             DiscoveryEntity(
-                configTopic = "$discoveryPrefix/sensor/batmon_${sanitizedId}/last_update/config",
-                payloadJson = lastUpdateObj.toString()
+                configTopic = "homeassistant/binary_sensor/${prefix}_${shortId}/is_charging/config",
+                payloadJson = binaryJson.toString()
             )
         )
 

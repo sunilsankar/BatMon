@@ -22,7 +22,7 @@ Many Android devices—such as wall-mounted dashboard tablets, dedicated smart h
 
 **BatMon** prevents battery degradation by keeping your device charged within a healthy battery cycle (typically 45% to 80%):
 
-1. **Automate Smart-Plug Charging:** Integrates with Home Assistant through MQTT 5.0 or HTTP webhooks to automatically turn a smart plug on when the battery drops below your low threshold, and turn it off when the high threshold is reached.
+1. **Automate Smart-Plug Charging:** Integrates with Home Assistant through MQTT or HTTP webhooks to automatically turn a smart plug on when the battery drops below your low threshold, and turn it off when the high threshold is reached.
 2. **Local-First & Private:** Communicates directly with your local Home Assistant instance or MQTT broker. No external cloud services, third-party servers, or proprietary accounts required.
 3. **Hardware Health Protection:** Protects retired and dedicated Android hardware from thermal stress and battery damage, safely extending their operational lifespan.
 4. **Standalone & Connected Flexibility:** Works as an autonomous local battery monitor with threshold notifications, or as a connected sensor node in your home automation setup.
@@ -32,7 +32,7 @@ Many Android devices—such as wall-mounted dashboard tablets, dedicated smart h
 - **Modern Jetpack Compose UI:** Material 3 design with light/dark theme support, smooth typography, and responsive layouts tailored for phones and tablets in both portrait and landscape orientations.
 - **Visual Battery Gauge:** Circular battery percentage dial displaying live charging state and configurable threshold markers.
 - **Configurable Battery Thresholds:** Custom low (default 45%) and high (default 80%) threshold boundaries with validation rules.
-- **MQTT 5.0 & Home Assistant Discovery:** Native MQTT 5.0 client support, automatic Home Assistant MQTT sensor discovery (`sensor.batmon_<device_id>_battery`, `binary_sensor.batmon_<device_id>_charging`, health, diagnostics), Last Will and Testament (LWT) availability tracking, and TLS broker support.
+- **MQTT & Home Assistant Discovery:** Standard MQTT 3.1.1 client support (Eclipse Paho v3), pre-flight TCP reachability verification, automatic Home Assistant MQTT sensor discovery (`battery_level`, `charging_status`, `temperature`, `health`, `last_update`, `is_charging`), Last Will and Testament (LWT) availability tracking, and individual metric telemetry topics.
 - **HTTP Webhooks:** Event-driven webhooks for battery thresholds and charging states with a durable offline queue, exponential backoff retries, delivery history logs, and configurable JSON payloads.
 - **Flexible Background Monitoring:**
   - **Low-Power Mode (Default):** Battery broadcast listener and WorkManager periodic background sync designed for minimal battery consumption.
@@ -63,19 +63,20 @@ The resulting APK will be at `app/build/outputs/apk/debug/app-debug.apk`.
 
 ## MQTT & Home Assistant Integration
 
-BatMon publishes battery metrics using MQTT 5.0 through Eclipse Paho (including Mosquitto / Home Assistant OS MQTT Add-on):
+BatMon publishes battery metrics using MQTT 3.1.1 through Eclipse Paho v3 (compatible with standard Mosquitto, EMQX, and Home Assistant OS MQTT broker add-ons):
 
-- **Connection:** Uses one MQTT 5.0 client with username/password authentication and an `offline` Last Will.
-- **State Topic:** `batmon/<device_id>/state` (configurable prefix, displayed in Settings)
-- **Event Topic:** `batmon/<device_id>/event` (threshold crossings and state events)
-- **Availability Topic:** `batmon/<device_id>/availability` (`online` with LWT `offline`)
-- **Home Assistant Auto-Discovery:** Publishes discovery definitions under `homeassistant/<component>/batmon_<device_id>/...`:
-  - `sensor.batmon_<device_id>_battery`: Battery percentage (device class: `battery`)
-  - `binary_sensor.batmon_<device_id>_charging`: Charging state (device class: `battery_charging`)
-  - `binary_sensor.batmon_<device_id>_monitoring`: Monitoring status diagnostic sensor
-  - `sensor.batmon_<device_id>_health`: Battery health diagnostic sensor
-  - `sensor.batmon_<device_id>_last_update`: ISO-8601 timestamp sensor
-- **Security:** Credentials are protected in app private storage, never logged in plaintext, and TLS with certificate verification is supported.
+- **Architecture:** Based on the proven `dsmr2mqtt` pattern with pre-flight TCP reachability checking, conditional authentication, clean session, and an `offline` Last Will.
+- **Availability / Status Topic:** `${mqttTopicPrefix}_${deviceShortId}/status` (`online` with retained LWT `offline`)
+- **Telemetry Topics:** Publishes individual scalar readings to `${mqttTopicPrefix}_${deviceShortId}/<metricTag>` (`battery_level`, `temperature`, `charging_status`, `is_charging`, `health`, `last_update`)
+- **State & Event Topics:** `${mqttTopicPrefix}_${deviceShortId}/state` and `${mqttTopicPrefix}_${deviceShortId}/event`
+- **Home Assistant Auto-Discovery:** Publishes discovery definitions under `homeassistant/sensor/${mqttTopicPrefix}_${deviceShortId}/<metricTag>/config` using standard abbreviated HA discovery keys:
+  - `sensor.<prefix>_<id>_battery_level`: Battery percentage (device class: `battery`)
+  - `sensor.<prefix>_<id>_charging_status`: Charging status string (`charging`, `discharging`, `full`, `not_charging`)
+  - `binary_sensor.<prefix>_<id>_is_charging`: Charging binary sensor (device class: `battery_charging`)
+  - `sensor.<prefix>_<id>_temperature`: Battery temperature in °C
+  - `sensor.<prefix>_<id>_health`: Battery health diagnostic sensor
+  - `sensor.<prefix>_<id>_last_update`: ISO-8601 timestamp sensor
+- **Security:** Credentials are protected in app private storage, never logged in plaintext, and trimmed automatically to prevent keyboard whitespace corruption.
 
 ## Webhooks
 

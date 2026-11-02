@@ -1,6 +1,7 @@
 package com.batmon.app.webhooks
 
 import android.util.Log
+import com.batmon.app.util.safeMessage
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -55,25 +56,24 @@ class WebhookDispatcher(
             return completed
         }
 
-        val requestBuilder = Request.Builder()
-            .url(item.url)
-            .addHeader("X-Event-ID", item.id)
-
-        // Add custom headers
-        item.headers.forEach { (k, v) ->
-            requestBuilder.addHeader(k, v)
-        }
-
-        val body = item.payload.toRequestBody(JSON_MEDIA_TYPE)
-        when (item.method.uppercase()) {
-            "PUT" -> requestBuilder.put(body)
-            else -> requestBuilder.post(body)
-        }
-
         val nextAttempt = item.attemptCount + 1
         val now = System.currentTimeMillis()
 
         return try {
+            val requestBuilder = Request.Builder()
+                .url(item.url)
+                .addHeader("X-Event-ID", item.id)
+
+            item.headers.forEach { (k, v) ->
+                requestBuilder.addHeader(k, v)
+            }
+
+            val body = item.payload.toRequestBody(JSON_MEDIA_TYPE)
+            when (item.method.uppercase()) {
+                "PUT" -> requestBuilder.put(body)
+                else -> requestBuilder.post(body)
+            }
+
             val response = okHttpClient.newCall(requestBuilder.build()).execute()
             val code = response.code
             response.close()
@@ -120,6 +120,16 @@ class WebhookDispatcher(
                     updated
                 }
             }
+        } catch (e: IllegalArgumentException) {
+            val completed = item.copy(
+                attemptCount = nextAttempt,
+                lastAttemptAtMs = now,
+                responseCode = null,
+                lastError = "Invalid request: ${sanitizeError(e.safeMessage())}",
+                status = DeliveryStatus.FAILED_PERMANENT
+            )
+            queueRepository.recordCompletion(completed)
+            completed
         } catch (e: IOException) {
             val isExhausted = nextAttempt >= item.maxRetries
             val cleanError = sanitizeError(e.message ?: "Network connection failed")
@@ -213,25 +223,26 @@ class WebhookDispatcher(
             .build()
 
         val parsedHeaders = WebhookPayloadFactory.parseHeaders(headers)
-        val requestBuilder = Request.Builder()
-            .url(url)
-            .addHeader("X-Event-ID", "test-${System.currentTimeMillis()}")
-
-        parsedHeaders.forEach { (k, v) -> requestBuilder.addHeader(k, v) }
-
-        val body = payload.toRequestBody(JSON_MEDIA_TYPE)
-        when (method.uppercase()) {
-            "PUT" -> requestBuilder.put(body)
-            else -> requestBuilder.post(body)
-        }
 
         return try {
+            val requestBuilder = Request.Builder()
+                .url(url)
+                .addHeader("X-Event-ID", "test-${System.currentTimeMillis()}")
+
+            parsedHeaders.forEach { (k, v) -> requestBuilder.addHeader(k, v) }
+
+            val body = payload.toRequestBody(JSON_MEDIA_TYPE)
+            when (method.uppercase()) {
+                "PUT" -> requestBuilder.put(body)
+                else -> requestBuilder.post(body)
+            }
+
             val response = client.newCall(requestBuilder.build()).execute()
             val code = response.code
             response.close()
             Result.success(code)
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(Exception(sanitizeError(e.safeMessage())))
         }
     }
 }

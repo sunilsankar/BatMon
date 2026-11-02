@@ -8,6 +8,7 @@ import com.batmon.app.background.BackgroundCoordinator
 import com.batmon.app.battery.ThresholdEngine
 import com.batmon.app.data.BatMonSettings
 import com.batmon.app.diagnostics.DiagnosticsInfo
+import com.batmon.app.util.safeMessage
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
@@ -123,7 +124,7 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
                     _mqttTestStatus.value = "Success: $msg"
                 },
                 onFailure = { err ->
-                    _mqttTestStatus.value = "Failed: ${err.message}"
+                    _mqttTestStatus.value = "Failed: ${err.safeMessage()}"
                 }
             )
             _isTestingMqtt.value = false
@@ -143,7 +144,7 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
                     _mqttTestStatus.value = "HA discovery published successfully"
                 },
                 onFailure = { err ->
-                    _mqttTestStatus.value = "Discovery error: ${err.message}"
+                    _mqttTestStatus.value = "Discovery error: ${err.safeMessage()}"
                 }
             )
         }
@@ -207,7 +208,7 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
                     _webhookTestStatus.value = "Success: HTTP $statusCode"
                 },
                 onFailure = { err ->
-                    _webhookTestStatus.value = "Failed: ${err.message}"
+                    _webhookTestStatus.value = "Failed: ${err.safeMessage()}"
                 }
             )
             _isTestingWebhook.value = false

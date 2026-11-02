@@ -82,100 +82,106 @@ class MqttPayloadFactoryTest {
     }
 
     @Test
-    fun buildDiscoveryEntities_createsFiveStableHaEntities() {
+    fun buildDiscoveryEntities_matchesDsmr2MqttSchema() {
         val settings = BatMonSettings(
             deviceId = "office-pixel-7",
             deviceName = "Office Pixel",
             mqtt = MqttSettings(
-                discoveryPrefix = "homeassistant",
-                topicPrefix = "batmon/office-pixel-7"
+                topicPrefix = "batmon"
             )
         )
 
         val entities = MqttPayloadFactory.buildDiscoveryEntities(settings)
-        assertEquals(5, entities.size)
+        assertEquals(6, entities.size)
 
         val entityMap = entities.associateBy { it.configTopic }
 
-        // 1. Battery Percentage Sensor
-        val batteryTopic = "homeassistant/sensor/batmon_office_pixel_7/battery/config"
+        // 1. Battery Level Sensor
+        val batteryTopic = "homeassistant/sensor/batmon_office_pixel_7/battery_level/config"
         val batteryEntity = entityMap[batteryTopic]
         assertNotNull("Battery entity topic missing", batteryEntity)
         val batteryJson = JSONObject(batteryEntity!!.payloadJson)
-        assertEquals("Battery", batteryJson.getString("name"))
-        assertEquals("batmon_office_pixel_7_battery", batteryJson.getString("unique_id"))
-        assertEquals("batmon/office-pixel-7/state", batteryJson.getString("state_topic"))
-        assertEquals("batmon/office-pixel-7/availability", batteryJson.getString("availability_topic"))
-        assertEquals("battery", batteryJson.getString("device_class"))
-        assertEquals("measurement", batteryJson.getString("state_class"))
-        assertEquals("%", batteryJson.getString("unit_of_measurement"))
-        assertEquals("{{ value_json.battery_percent }}", batteryJson.getString("value_template"))
+        assertEquals("Battery Level", batteryJson.getString("name"))
+        assertEquals("batmon_office_pixel_7_battery_level", batteryJson.getString("uniq_id"))
+        assertEquals("batmon_office_pixel_7/battery_level", batteryJson.getString("stat_t"))
+        assertEquals("batmon_office_pixel_7/status", batteryJson.getString("avty_t"))
+        assertEquals("battery", batteryJson.getString("dev_cla"))
+        assertEquals("measurement", batteryJson.getString("stat_cla"))
+        assertEquals("%", batteryJson.getString("unit_of_meas"))
 
         // Verify device block
-        val device = batteryJson.getJSONObject("device")
-        assertEquals("Office Pixel", device.getString("name"))
-        assertEquals("Android Battery Monitor", device.getString("model"))
-        assertEquals("BatMon", device.getString("manufacturer"))
-        assertEquals("batmon_office_pixel_7", device.getJSONArray("identifiers").getString(0))
+        val device = batteryJson.getJSONObject("dev")
+        assertTrue(device.getString("name").contains("Office Pixel"))
+        assertEquals("Office Pixel", device.getString("mdl"))
+        assertEquals("Android Batmon", device.getString("mf"))
+        assertEquals("batmon_office_pixel_7", device.getJSONArray("ids").getString(0))
 
-        // 2. Charging Binary Sensor
-        val chargingTopic = "homeassistant/binary_sensor/batmon_office_pixel_7/charging/config"
+        // 2. Charging Status Sensor (string state -> no stat_cla)
+        val chargingStatusTopic = "homeassistant/sensor/batmon_office_pixel_7/charging_status/config"
+        val chargingStatusEntity = entityMap[chargingStatusTopic]
+        assertNotNull("Charging status topic missing", chargingStatusEntity)
+        val chargingStatusJson = JSONObject(chargingStatusEntity!!.payloadJson)
+        assertEquals("Charging Status", chargingStatusJson.getString("name"))
+        assertEquals("batmon_office_pixel_7_charging_status", chargingStatusJson.getString("uniq_id"))
+        assertEquals("batmon_office_pixel_7/charging_status", chargingStatusJson.getString("stat_t"))
+        assertFalse("String sensor must not have stat_cla", chargingStatusJson.has("stat_cla"))
+
+        // 3. Charging Binary Sensor
+        val chargingTopic = "homeassistant/binary_sensor/batmon_office_pixel_7/is_charging/config"
         val chargingEntity = entityMap[chargingTopic]
-        assertNotNull("Charging entity topic missing", chargingEntity)
+        assertNotNull("Charging binary sensor topic missing", chargingEntity)
         val chargingJson = JSONObject(chargingEntity!!.payloadJson)
         assertEquals("Charging", chargingJson.getString("name"))
-        assertEquals("batmon_office_pixel_7_charging", chargingJson.getString("unique_id"))
-        assertEquals("battery_charging", chargingJson.getString("device_class"))
-        assertEquals("true", chargingJson.getString("payload_on"))
-        assertEquals("false", chargingJson.getString("payload_off"))
-        assertEquals("{{ value_json.is_charging }}", chargingJson.getString("value_template"))
+        assertEquals("batmon_office_pixel_7_is_charging", chargingJson.getString("uniq_id"))
+        assertEquals("battery_charging", chargingJson.getString("dev_cla"))
+        assertEquals("ON", chargingJson.getString("pl_on"))
+        assertEquals("OFF", chargingJson.getString("pl_off"))
+        assertEquals("batmon_office_pixel_7/is_charging", chargingJson.getString("stat_t"))
 
-        // 3. Monitoring Diagnostic Binary Sensor
-        val monitoringTopic = "homeassistant/binary_sensor/batmon_office_pixel_7/monitoring/config"
-        val monitoringEntity = entityMap[monitoringTopic]
-        assertNotNull("Monitoring entity topic missing", monitoringEntity)
-        val monitoringJson = JSONObject(monitoringEntity!!.payloadJson)
-        assertEquals("diagnostic", monitoringJson.getString("entity_category"))
-        assertEquals("{{ value_json.monitoring_enabled }}", monitoringJson.getString("value_template"))
+        // 4. Temperature Sensor
+        val tempTopic = "homeassistant/sensor/batmon_office_pixel_7/temperature/config"
+        val tempEntity = entityMap[tempTopic]
+        assertNotNull("Temperature topic missing", tempEntity)
+        val tempJson = JSONObject(tempEntity!!.payloadJson)
+        assertEquals("temperature", tempJson.getString("dev_cla"))
+        assertEquals("measurement", tempJson.getString("stat_cla"))
+        assertEquals("°C", tempJson.getString("unit_of_meas"))
 
-        // 4. Battery Health Sensor
+        // 5. Health Sensor
         val healthTopic = "homeassistant/sensor/batmon_office_pixel_7/health/config"
         val healthEntity = entityMap[healthTopic]
-        assertNotNull("Health entity topic missing", healthEntity)
+        assertNotNull("Health topic missing", healthEntity)
         val healthJson = JSONObject(healthEntity!!.payloadJson)
-        assertEquals("diagnostic", healthJson.getString("entity_category"))
-        assertEquals("mdi:battery-heart-variant", healthJson.getString("icon"))
+        assertEquals("diagnostic", healthJson.getString("ent_cat"))
 
-        // 5. Last Update Sensor
+        // 6. Last Update Sensor
         val lastUpdateTopic = "homeassistant/sensor/batmon_office_pixel_7/last_update/config"
         val lastUpdateEntity = entityMap[lastUpdateTopic]
-        assertNotNull("Last update entity topic missing", lastUpdateEntity)
+        assertNotNull("Last update topic missing", lastUpdateEntity)
         val lastUpdateJson = JSONObject(lastUpdateEntity!!.payloadJson)
-        assertEquals("timestamp", lastUpdateJson.getString("device_class"))
-        assertEquals("diagnostic", lastUpdateJson.getString("entity_category"))
-        assertEquals("{{ value_json.timestamp }}", lastUpdateJson.getString("value_template"))
+        assertEquals("timestamp", lastUpdateJson.getString("dev_cla"))
+        assertEquals("diagnostic", lastUpdateJson.getString("ent_cat"))
     }
 
     @Test
-    fun customTopicPrefix_reflectedInTopics() {
-        val settings = BatMonSettings(
-            deviceId = "tablet-123",
-            mqtt = MqttSettings(
-                topicPrefix = "home/tablet",
-                discoveryPrefix = "ha"
-            )
+    fun buildMetricReadings_providesScalarValues() {
+        val battery = BatteryState(
+            percentage = 72,
+            isCharging = false,
+            chargingStatus = "Discharging",
+            pluggedSource = "Unplugged",
+            temperatureCelsius = 26.5f,
+            health = "Good",
+            timestampMs = 1700000000000L
         )
 
-        assertEquals("home/tablet/state", settings.mqtt.stateTopic(settings.deviceId))
-        assertEquals("home/tablet/availability", settings.mqtt.availabilityTopic(settings.deviceId))
-
-        val entities = MqttPayloadFactory.buildDiscoveryEntities(settings)
-        for (entity in entities) {
-            assertTrue(entity.configTopic.startsWith("ha/"))
-            val json = JSONObject(entity.payloadJson)
-            assertEquals("home/tablet/state", json.getString("state_topic"))
-            assertEquals("home/tablet/availability", json.getString("availability_topic"))
-        }
+        val readings = MqttPayloadFactory.buildMetricReadings(battery, 1700000000000L)
+        assertEquals("72", readings["battery_level"])
+        assertEquals("discharging", readings["charging_status"])
+        assertEquals("OFF", readings["is_charging"])
+        assertEquals("Good", readings["health"])
+        assertEquals("26.5", readings["temperature"])
+        assertEquals(Instant.ofEpochMilli(1700000000000L).toString(), readings["last_update"])
     }
 
     @Test

@@ -437,24 +437,17 @@ fun MqttSettingsCard(
     var portText by remember(settings.mqtt.port) { mutableStateOf(settings.mqtt.port.toString()) }
     var username by remember(settings.mqtt.username) { mutableStateOf(settings.mqtt.username) }
     var password by remember(settings.mqtt.password) { mutableStateOf(settings.mqtt.password) }
-    var useTls by remember(settings.mqtt.useTls) { mutableStateOf(settings.mqtt.useTls) }
     var topicPrefix by remember(settings.mqtt.topicPrefix) { mutableStateOf(settings.mqtt.topicPrefix) }
-    var discoveryPrefix by remember(settings.mqtt.discoveryPrefix) { mutableStateOf(settings.mqtt.discoveryPrefix) }
     var discoveryEnabled by remember(settings.mqtt.discoveryEnabled) { mutableStateOf(settings.mqtt.discoveryEnabled) }
-    var retain by remember(settings.mqtt.retain) { mutableStateOf(settings.mqtt.retain) }
 
     fun currentMqtt(): MqttSettings = MqttSettings(
         enabled = enabled,
-        host = host,
-        port = portText.toIntOrNull() ?: 1883,
-        clientId = settings.mqtt.effectiveClientId(settings.deviceId),
-        username = username,
-        password = password,
-        useTls = useTls,
-        topicPrefix = topicPrefix,
-        discoveryPrefix = discoveryPrefix.ifBlank { "homeassistant" },
-        discoveryEnabled = discoveryEnabled,
-        retain = retain
+        host = host.trim(),
+        port = portText.trim().toIntOrNull() ?: 1883,
+        username = username.trim(),
+        password = password.trim(),
+        topicPrefix = topicPrefix.trim(),
+        discoveryEnabled = discoveryEnabled
     )
 
     Card(
@@ -506,42 +499,15 @@ fun MqttSettingsCard(
                     modifier = Modifier.fillMaxWidth()
                 )
 
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    OutlinedTextField(
-                        value = portText,
-                        onValueChange = { portText = it },
-                        label = { Text("Port") },
-                        placeholder = { Text(if (useTls) "8883" else "1883") },
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        singleLine = true,
-                        modifier = Modifier.weight(1f)
-                    )
-
-                    Column(
-                        modifier = Modifier
-                            .weight(1f)
-                            .padding(top = 8.dp)
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text("Use TLS", style = MaterialTheme.typography.bodyMedium)
-                            Switch(
-                                checked = useTls,
-                                onCheckedChange = {
-                                    useTls = it
-                                    if (it && portText == "1883") portText = "8883"
-                                    if (!it && portText == "8883") portText = "1883"
-                                }
-                            )
-                        }
-                    }
-                }
+                OutlinedTextField(
+                    value = portText,
+                    onValueChange = { portText = it },
+                    label = { Text("Port") },
+                    placeholder = { Text("1883") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
 
                 OutlinedTextField(
                     value = username,
@@ -574,9 +540,9 @@ fun MqttSettingsCard(
                     value = topicPrefix,
                     onValueChange = { topicPrefix = it },
                     label = { Text("Topic Prefix") },
-                    placeholder = { Text("batmon/${settings.deviceId}") },
+                    placeholder = { Text("batmon") },
                     supportingText = {
-                        Text("Default: batmon/${settings.deviceId}. Leave empty to use default.")
+                        Text("Prefix for MQTT topics (default: batmon)")
                     },
                     keyboardOptions = KeyboardOptions(
                         capitalization = KeyboardCapitalization.None,
@@ -595,9 +561,9 @@ fun MqttSettingsCard(
                 )
 
                 val resolvedClientId = currentMqtt().effectiveClientId(settings.deviceId)
+                val resolvedStatusTopic = currentMqtt().statusTopic(settings.deviceId)
+                val resolvedBatteryTopic = currentMqtt().metricTopic(settings.deviceId, "battery_level")
                 val resolvedStateTopic = currentMqtt().stateTopic(settings.deviceId)
-                val resolvedEventTopic = currentMqtt().eventTopic(settings.deviceId)
-                val resolvedAvailabilityTopic = currentMqtt().availabilityTopic(settings.deviceId)
 
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -615,19 +581,19 @@ fun MqttSettingsCard(
                             fontWeight = FontWeight.SemiBold
                         )
                         Text(
-                            text = "• Client ID: $resolvedClientId (autogenerated)",
+                            text = "• Client ID: $resolvedClientId",
                             style = MaterialTheme.typography.bodySmall
                         )
                         Text(
-                            text = "• State: $resolvedStateTopic",
+                            text = "• Availability / LWT: $resolvedStatusTopic",
                             style = MaterialTheme.typography.bodySmall
                         )
                         Text(
-                            text = "• Events: $resolvedEventTopic",
+                            text = "• Telemetry: $resolvedBatteryTopic, ...",
                             style = MaterialTheme.typography.bodySmall
                         )
                         Text(
-                            text = "• Availability: $resolvedAvailabilityTopic",
+                            text = "• State JSON: $resolvedStateTopic",
                             style = MaterialTheme.typography.bodySmall
                         )
                     }
@@ -652,32 +618,13 @@ fun MqttSettingsCard(
                     )
                 }
 
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text("Retain State Messages", style = MaterialTheme.typography.bodyMedium)
-                        Text(
-                            text = "Keep last known state on broker for HA startup",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    Switch(
-                        checked = retain,
-                        onCheckedChange = { retain = it }
-                    )
-                }
-
                 mqttTestStatus?.let { status ->
                     Card(
                         modifier = Modifier.fillMaxWidth(),
                         colors = CardDefaults.cardColors(
-                            containerColor = if (status.startsWith("Success") || status.contains("successfully"))
+                            containerColor = if (status.startsWith("Connected to") || status.startsWith("Success") || status.contains("successfully"))
                                 MaterialTheme.colorScheme.primaryContainer
-                            else if (status.startsWith("Failed") || status.contains("error"))
+                            else if (status.startsWith("Cannot reach") || status.startsWith("Broker reached, but authentication failed") || status.startsWith("Failed") || status.contains("error"))
                                 MaterialTheme.colorScheme.errorContainer
                             else
                                 MaterialTheme.colorScheme.surfaceVariant
@@ -713,7 +660,7 @@ fun MqttSettingsCard(
                                 modifier = Modifier.height(16.dp)
                             )
                         } else {
-                            Text("Test & Publish")
+                            Text("Test Connection")
                         }
                     }
                 }
