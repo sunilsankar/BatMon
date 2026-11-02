@@ -32,7 +32,8 @@ private class PahoMqttClient(
     serverUri: String,
     clientId: String,
     settings: BatMonSettings,
-    anonymous: Boolean = false
+    anonymous: Boolean = false,
+    withWill: Boolean = true
 ) {
     private val client = MqttClient(
         serverUri,
@@ -54,8 +55,10 @@ private class PahoMqttClient(
             this.password = password.toCharArray()
         }
 
-        val statusTopic = settings.mqtt.statusTopic(settings.deviceId)
-        setWill(statusTopic, "offline".toByteArray(Charsets.UTF_8), 1, true)
+        if (withWill) {
+            val statusTopic = settings.mqtt.statusTopic(settings.deviceId)
+            setWill(statusTopic, "offline".toByteArray(Charsets.UTF_8), 1, true)
+        }
     }
 
     fun connect() = client.connect(options)
@@ -70,9 +73,12 @@ private class PahoMqttClient(
 
     fun disconnect() {
         try {
-            if (client.isConnected) client.disconnectForcibly(1000)
-            client.close()
-        } catch (_: Exception) {}
+            if (client.isConnected) client.disconnect(1000)
+        } catch (_: Exception) {
+            try { if (client.isConnected) client.disconnectForcibly(500) } catch (_: Exception) {}
+        } finally {
+            try { client.close() } catch (_: Exception) {}
+        }
     }
 
     val isConnected: Boolean get() = client.isConnected
@@ -167,8 +173,9 @@ class MqttPublisher {
         settings: BatMonSettings,
         serverUri: String,
         clientId: String,
-        anonymous: Boolean = false
-    ) = PahoMqttClient(serverUri, clientId, settings, anonymous)
+        anonymous: Boolean = false,
+        withWill: Boolean = true
+    ) = PahoMqttClient(serverUri, clientId, settings, anonymous, withWill)
 
     suspend fun publishState(
         batteryState: BatteryState,
@@ -217,6 +224,21 @@ class MqttPublisher {
                     qos = 1,
                     retained = true
                 )
+
+                // 4. Ensure Home Assistant discovery is published
+                if (settings.mqtt.discoveryEnabled) {
+                    try {
+                        val entities = MqttPayloadFactory.buildDiscoveryEntities(settings)
+                        for (entity in entities) {
+                            activeClient.publish(
+                                topic = entity.configTopic,
+                                payload = entity.payloadJson.toByteArray(Charsets.UTF_8),
+                                qos = 1,
+                                retained = true
+                            )
+                        }
+                    } catch (_: Exception) {}
+                }
 
                 _status.value = MqttConnectionStatus.Connected
                 Result.success(Unit)
@@ -418,7 +440,7 @@ class MqttPublisher {
 
         val serverUri = resolveServerUri(settings)
         val clientId = settings.mqtt.effectiveClientId(settings.deviceId)
-        val testClient = createClient(settings, serverUri, clientId)
+        val testClient = createClient(settings, serverUri, clientId, withWill = false)
         try {
             testClient.connect()
             if (!testClient.isConnected) {
@@ -495,7 +517,9 @@ class MqttPublisher {
                     "Anonymous"
                 }
             }
-            Result.success("Connected to $host:$port ($authInfo)")
+            val metricsSummary = "Battery: ${stateToPublish.percentage}%" +
+                (stateToPublish.temperatureCelsius?.let { ", ${String.format(java.util.Locale.US, "%.1f", it)}°C" } ?: "")
+            Result.success("Connected to $host:$port ($authInfo) — $metricsSummary")
         } catch (e: Exception) {
             try { testClient.disconnect() } catch (_: Exception) {}
 
