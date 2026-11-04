@@ -30,5 +30,9 @@ Read `SPECIFICATION.md` before implementation. It is the product source of truth
 7. Report exactly what was tested and what remains unverified.
 8. Never claim an APK exists unless it was actually built successfully.
 
+## Design System & Styling
+When building UI, writing frontend components, or styling interfaces, adhere to the design guidelines defined in:
+`./.opencode/skills/apple-design/SKILL.md`
+
 ## Quality bar
 Prefer simple, maintainable code over speculative abstraction. Validate thresholds and configuration at boundaries. Use bounded retries, stable entity IDs, unique webhook event IDs, sanitized errors, and explicit stale-data handling.

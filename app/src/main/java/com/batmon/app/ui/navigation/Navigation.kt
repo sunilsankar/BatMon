@@ -35,6 +35,7 @@ fun BatMonNavGraph(
                 onNavigateToSettings = { navController.navigate(Destinations.SETTINGS) },
                 onUpdateLowThreshold = { viewModel.updateLowThreshold(it) },
                 onUpdateHighThreshold = { viewModel.updateHighThreshold(it) },
+                onToggleMonitoring = { viewModel.toggleMonitoring(it) },
                 onUpdateClick = { viewModel.openUpdate(context, it) },
                 onDismissUpdate = { viewModel.dismissUpdate() }
             )
